@@ -1,1 +1,1 @@
-# Lung-Cancer-Classification
+# Lung-Cancer-Image-Classification
