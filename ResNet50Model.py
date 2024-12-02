@@ -1,5 +1,3 @@
-# To convert images to grayscale: https://www.resizepixel.com/download
-
 # Import packages
 import os
 import copy
@@ -528,7 +526,7 @@ def get_activation(name, activation):
     # The `hook` function itself is returned by `get_activation`, so it can be registered.
     return hook
 
-def get_params(model, learningRate=1e-3, weight_decay=1e-4, momentum=0.7, factor=0.5, patience=3):
+def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.7, factor=0.5, patience=3):
 
     # Define the loss function as CrossEntropyLoss, commonly used for multi-class classification tasks.
     criterion = nn.CrossEntropyLoss()
@@ -546,7 +544,7 @@ def get_params(model, learningRate=1e-3, weight_decay=1e-4, momentum=0.7, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=25, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=40, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Main function for training the model.
@@ -822,7 +820,3 @@ def main():
 # Entry point for the script
 if __name__ == "__main__":
     main()
-
-# Doubts
-  # 1) What size to do images because the layer size of resnet34 is 512? Images are blurry with size 512.
-  # 2) If I have to look for more data what is recommended: Kaggle, NBIA Data Retriever, Pittsburgh Supercomputer?
