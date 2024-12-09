@@ -13,3 +13,7 @@ Perform segmentation on the lung images and feed the resulting patches into Conv
 # Note:
   If 'FileNotFoundError: Found no valid file for the classes Cancerous, NotCancerous. Supported extensions are: .jpg, .jpeg, .png, .ppm, .bmp, .pgm, .tif, .tiff, .webp' error occurs when running
   python ResNet50, the data has not split properly, so rerun 'python ResNet50' in the terminal.
+
+# References:
+  https://github.com/CMUSchwartzLab/imgFISH/tree/nick/stardist
+  https://github.com/CMUSchwartzLab/ExPath-CNN/tree/main
