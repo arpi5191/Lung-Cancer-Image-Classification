@@ -15,6 +15,6 @@ Perform segmentation on the lung images and feed the resulting patches into Conv
   python ResNet50, the data has not split properly, so rerun 'python ResNet50' in the terminal.
 
 # References:
-  https://github.com/CMUSchwartzLab/imgFISH/tree/nick/stardist
+  1) https://github.com/CMUSchwartzLab/imgFISH/tree/nick/stardist
   
-  https://github.com/CMUSchwartzLab/ExPath-CNN/tree/main
+  2) https://github.com/CMUSchwartzLab/ExPath-CNN/tree/main
