@@ -340,7 +340,5 @@ def main():
     voronoi_data = voronoi(cancer_tif_paths, "Cancerous", args.didx, args.d, voronoi_data)
     voronoi_data = voronoi(no_cancer_tif_paths, "NotCancerous", args.didx, args.d, voronoi_data)
 
-    print(voronoi_data)
-
 if __name__ == "__main__":
     main()
