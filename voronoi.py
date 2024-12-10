@@ -1,8 +1,8 @@
 # To run:
-    # Run File: python seg.py --nmin 50 --nmax 1000 --didx 0 --d 2
-    # Create image: docker build . -t seg
-    # Get a shell into a container: docker run -it -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/seg:/seg seg bash
-    # Run Segmentation: docker run -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/seg:/seg -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif:/tif -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/patches:/patches seg
+    # Run File: python voronoi.py --nmin 50 --nmax 1000 --didx 0 --d 2
+    # Create image: docker build . -t voronoi
+    # Get a shell into a container: docker run -it -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi voronoi bash
+    # Run Segmentation: docker run -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_tif:/voronoi_tif -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi voronoi_tif
     # Launch virtual environment (https://www.youtube.com/watch?v=WFIZn6titnc):
       # source ~/miniforge3/bin/activate
       # conda install -c apple tensorflow-deps
