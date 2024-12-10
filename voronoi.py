@@ -221,6 +221,10 @@ def voronoi_process(voronoi_data):
     # Split the data into training and testing sets, using 80% for training and 20% for testing
     X_train, X_test, y_train, y_test = train_test_split(voronoi_data, labels, test_size=0.3, random_state=42, shuffle=True)
 
+    # Convert the 'Diagnosis' column from y_train and y_test into lists for model training
+    y_train = y_train['Diagnosis'].tolist()
+    y_test = y_test['Diagnosis'].tolist()
+
     # Return the split datasets for training and testing
     return X_train, X_test, y_train, y_test
 
