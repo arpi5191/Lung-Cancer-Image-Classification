@@ -155,24 +155,6 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval, vo
             # The formula is: circularity = (4 * pi * area) / (perimeter^2)
             circularity = (4 * math.pi * area) / (perimeter * perimeter)
 
-            # Calculate the perimeter (length) of the convex hull of the polygon:
-            # The convex hull is the smallest convex shape that can completely contain the polygon.
-            convex_hull_perimeter = polygon.convex_hull.length
-
-            # Calculate the area of the convex hull of the polygon:
-            # This gives the area of the smallest convex shape that contains the polygon.
-            convex_hull_area = polygon.convex_hull.area
-
-            # Calculate the convexity of the polygon:
-            # Convexity is the ratio of the convex hull's perimeter to the polygon's perimeter.
-            # A value of 1 means the polygon is convex, and values greater than 1 suggest concave portions.
-            convexity = convex_hull_perimeter / perimeter
-
-            # Calculate the solidity of the polygon:
-            # Solidity is the ratio of the polygon's area to the area of its convex hull.
-            # A value of 1 indicates a convex polygon, while values less than 1 indicate concave regions.
-            solidity = area / convex_hull_area
-
             # Calculate the number of vertices (corner points) in the polygon
             # The number of vertices is determined by the length of the 'coords' list
             num_vertices = len(coords)
@@ -195,8 +177,8 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval, vo
             # Define a list called 'features' that contains the calculated metrics for the current Voronoi polygon.
             # Each element in this list corresponds to one of the features we've computed (e.g., area, perimeter, skewness, etc.)
             # These features will be used to populate a row in the DataFrame for storing and further analysis.
-            features = [area, perimeter, compactness, circularity, convex_hull_perimeter, convex_hull_area, convexity,
-                        solidity, num_vertices, x_skewness, y_skewness, x_kurtosis, y_kurtosis, classification]
+            features = [area, perimeter, compactness, circularity, num_vertices,
+                        x_skewness, y_skewness, x_kurtosis, y_kurtosis, classification]
 
             # Append the calculated 'features' as a new row in the 'voronoi_data' DataFrame
             voronoi_data.loc[len(voronoi_data)] = features
@@ -320,10 +302,6 @@ def main():
         "Perimeter",             # The perimeter (length) of the polygon
         "Compactness",           # Compactness: how circular the polygon is
         "Circularity",           # Circularity: how close the polygon is to a perfect circle
-        "Convex Hull Perimeter", # The perimeter of the convex hull (smallest convex shape containing the polygon)
-        "Convex Hull Area",      # The area of the convex hull
-        "Convexity",             # The ratio of convex hull perimeter to polygon perimeter
-        "Solidity",              # The ratio of the polygon's area to its convex hull's area
         "Number of Vertices",    # The number of vertices in the polygon
         "X Skewness",            # Skewness of the x-coordinates of the polygon vertices
         "Y Skewness",            # Skewness of the y-coordinates of the polygon vertices
@@ -339,6 +317,8 @@ def main():
     # Process cancerous and non-cancerous image data using the voronoi function and update the DataFrame
     voronoi_data = voronoi(cancer_tif_paths, "Cancerous", args.didx, args.d, voronoi_data)
     voronoi_data = voronoi(no_cancer_tif_paths, "NotCancerous", args.didx, args.d, voronoi_data)
+
+    print(voronoi_data)
 
 if __name__ == "__main__":
     main()
