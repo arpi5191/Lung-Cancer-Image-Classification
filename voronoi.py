@@ -15,12 +15,14 @@ import pathlib
 import tifffile
 import argparse
 import numpy as np
+import pandas as pd
 from scipy.ndimage import zoom
 import matplotlib.pyplot as plt
 from csbdeep.utils import normalize
 import skimage.exposure as exposure
 from shapely.geometry import Polygon
 from stardist.models import StarDist2D
+from scipy.stats import skew, kurtosis
 from scipy.spatial import Voronoi, voronoi_plot_2d
 
 def load_channel(tif_path, channel_idx):
@@ -40,7 +42,7 @@ def load_channel(tif_path, channel_idx):
     # Rescale the intensity values of the image to a range of 0-255 for consistency
     return exposure.rescale_intensity(channel, in_range='image', out_range=(0, 255)).astype(np.uint8)
 
-def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval):
+def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval, voronoi_data):
 
     # Iterate through each .tif file path
     for tif_path in tif_paths:
@@ -171,8 +173,37 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval):
             # A value of 1 indicates a convex polygon, while values less than 1 indicate concave regions.
             solidity = area / convex_hull_area
 
-    # Return
-    return
+            # Calculate the number of vertices (corner points) in the polygon
+            # The number of vertices is determined by the length of the 'coords' list
+            num_vertices = len(coords)
+
+            # Separate the x and y coordinates from the vertices
+            # 'coords' contains (x, y) pairs, which are unzipped into two separate lists: x_coords and y_coords
+            x_coords, y_coords = zip(*coords)
+
+            # Calculate the skewness of the x and y coordinates
+            # Skewness measures the asymmetry of the distribution of the coordinates
+            # Positive skewness indicates a longer tail on the right, negative skewness indicates a longer tail on the left
+            # This could help identify irregularities in the polygon's shape
+            x_skewness, y_skewness = skew(x_coords), skew(y_coords)
+
+            # Calculate the kurtosis of the x and y coordinates
+            # Kurtosis measures the "tailedness" of the distribution of the coordinates
+            # High kurtosis indicates heavy tails, while low kurtosis indicates light tails
+            x_kurtosis, y_kurtosis = kurtosis(x_coords), kurtosis(y_coords)
+
+            # Define a list called 'features' that contains the calculated metrics for the current Voronoi polygon.
+            # Each element in this list corresponds to one of the features we've computed (e.g., area, perimeter, skewness, etc.)
+            # These features will be used to populate a row in the DataFrame for storing and further analysis.
+            features = [area, perimeter, compactness, circularity, convex_hull_perimeter, convex_hull_area, convexity,
+                        solidity, num_vertices, x_skewness, y_skewness, x_kurtosis, y_kurtosis, classification]
+
+            # Append the calculated 'features' as a new row in the 'voronoi_data' DataFrame
+            voronoi_data.loc[len(voronoi_data)] = features
+
+    # Return the DataFrame containing the Voronoi features
+    return voronoi_data
+
 
 def distance(x1, x2, y1, y2):
 
@@ -277,9 +308,39 @@ def main():
     else:
         print(f"Failed to create the directory '{no_cancer_patch_dir}'.")
 
-    # Perform Voronoi diagram generation on the loaded TIFF images from cancerous and non-cancerous datasets
-    voronoi(cancer_tif_paths, "Cancerous", args.didx, args.d)
-    voronoi(no_cancer_tif_paths, "NotCancerous", args.didx, args.d)
+    # Define the column names for the DataFrame
+    # These columns correspond to the various features of the Voronoi polygons that we want to calculate and store
+    # Define the column names for the DataFrame
+    # These columns correspond to the various features of the Voronoi polygons that we want to calculate and store.
+    # The columns include various geometric and statistical features (e.g., area, perimeter, skewness, kurtosis) of the polygons,
+    # which are essential for further analysis and model training. Additionally, a 'Diagnosis' column is added to store the label
+    # (e.g., cancerous or non-cancerous) associated with each polygon.
+    columns = [
+        "Area",                  # The area of the polygon
+        "Perimeter",             # The perimeter (length) of the polygon
+        "Compactness",           # Compactness: how circular the polygon is
+        "Circularity",           # Circularity: how close the polygon is to a perfect circle
+        "Convex Hull Perimeter", # The perimeter of the convex hull (smallest convex shape containing the polygon)
+        "Convex Hull Area",      # The area of the convex hull
+        "Convexity",             # The ratio of convex hull perimeter to polygon perimeter
+        "Solidity",              # The ratio of the polygon's area to its convex hull's area
+        "Number of Vertices",    # The number of vertices in the polygon
+        "X Skewness",            # Skewness of the x-coordinates of the polygon vertices
+        "Y Skewness",            # Skewness of the y-coordinates of the polygon vertices
+        "X Kurtosis",            # Kurtosis of the x-coordinates of the polygon vertices
+        "Y Kurtosis",            # Kurtosis of the y-coordinates of the polygon vertices
+        "Diagnosis"              # The label indicating whether the polygon is cancerous or non-cancerous
+    ]
+
+    # Create an empty DataFrame using the defined column names
+    # This DataFrame will store the computed features for each Voronoi region/polygon
+    voronoi_data = pd.DataFrame(columns=columns)
+
+    # Process cancerous and non-cancerous image data using the voronoi function and update the DataFrame
+    voronoi_data = voronoi(cancer_tif_paths, "Cancerous", args.didx, args.d, voronoi_data)
+    voronoi_data = voronoi(no_cancer_tif_paths, "NotCancerous", args.didx, args.d, voronoi_data)
+
+    print(voronoi_data)
 
 if __name__ == "__main__":
     main()
