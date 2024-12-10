@@ -250,13 +250,13 @@ def Logistic_Regression(X_train, X_test, y_train, y_test):
     r2 = r2_score(y_test, y_pred_test)
 
     # Print the metrics for the testing dataset
-    print(f'Validation Accuracy: {accuracy:.3f}')
-    print(f'Validation Precision: {precision:.3f}')
-    print(f'Validation Recall: {recall:.3f}')
-    print(f'Validation F1: {f1:.3f}')
-    print(f'Validation Mean Absolute Error: {mae:.3f}')
-    print(f'Validation Mean Squared Error: {mse:.3f}')
-    print(f'Validation Mean R-Squared: {r2:.3f}')
+    print(f'Testing Accuracy: {accuracy:.3f}')
+    print(f'Testing Precision: {precision:.3f}')
+    print(f'Testing Recall: {recall:.3f}')
+    print(f'Testing F1: {f1:.3f}')
+    print(f'Testing Mean Absolute Error: {mae:.3f}')
+    print(f'Testing Mean Squared Error: {mse:.3f}')
+    print(f'Testing Mean R-Squared: {r2:.3f}')
 
 def main():
 
@@ -377,6 +377,9 @@ def main():
 
     # Call the voronoi_process function to preprocess the data, scale it, and split it into training and testing sets
     X_train, X_test, y_train, y_test = voronoi_process(voronoi_data)
+
+    # Give a line of space
+    print()
 
     # Call the Logistic Regression function to train and test the model using the training and testing data
     Logistic_Regression(X_train, X_test, y_train, y_test)
