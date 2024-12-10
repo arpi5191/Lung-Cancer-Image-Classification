@@ -23,7 +23,9 @@ import skimage.exposure as exposure
 from shapely.geometry import Polygon
 from stardist.models import StarDist2D
 from scipy.stats import skew, kurtosis
+from sklearn.preprocessing import StandardScaler
 from scipy.spatial import Voronoi, voronoi_plot_2d
+from sklearn.model_selection import train_test_split
 
 def load_channel(tif_path, channel_idx):
     ''' Load the specified channel from a multi-channel TIFF file as a 2D numpy array.
@@ -186,7 +188,6 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval, vo
     # Return the DataFrame containing the Voronoi features
     return voronoi_data
 
-
 def distance(x1, x2, y1, y2):
 
     # Calculate the squared difference in x-coordinates
@@ -200,6 +201,28 @@ def distance(x1, x2, y1, y2):
 
     # Return distance
     return dist
+
+def voronoi_process(voronoi_data):
+
+    # Map the 'Diagnosis' column values to 1 for 'Cancerous' and 0 for 'NotCancerous'
+    voronoi_data['Diagnosis'] = voronoi_data['Diagnosis'].map({'Cancerous': 1, 'NotCancerous': 0})
+
+    # Extract the 'Diagnosis' column as the labels and drop it from the features
+    labels = voronoi_data[['Diagnosis']]
+    voronoi_data.drop('Diagnosis', axis=1, inplace=True)
+
+    # Scale the feature data using StandardScaler to normalize the values
+    scaler = StandardScaler()
+    voronoi_data_scaled = scaler.fit_transform(voronoi_data)
+
+    # Convert the scaled data back to a DataFrame with the original column names
+    voronoi_data_scaled = pd.DataFrame(voronoi_data_scaled, columns=voronoi_data.columns)
+
+    # Split the data into training and testing sets, using 80% for training and 20% for testing
+    X_train, X_test, y_train, y_test = train_test_split(voronoi_data, labels, test_size=0.3, random_state=42, shuffle=True)
+
+    # Return the split datasets for training and testing
+    return X_train, X_test, y_train, y_test
 
 def main():
 
@@ -308,7 +331,7 @@ def main():
         "X Kurtosis",            # Kurtosis of the x-coordinates of the polygon vertices
         "Y Kurtosis",            # Kurtosis of the y-coordinates of the polygon vertices
         "Diagnosis"              # The label indicating whether the polygon is cancerous or non-cancerous
-    ]
+      ]
 
     # Create an empty DataFrame using the defined column names
     # This DataFrame will store the computed features for each Voronoi region/polygon
@@ -318,7 +341,8 @@ def main():
     voronoi_data = voronoi(cancer_tif_paths, "Cancerous", args.didx, args.d, voronoi_data)
     voronoi_data = voronoi(no_cancer_tif_paths, "NotCancerous", args.didx, args.d, voronoi_data)
 
-    print(voronoi_data)
+    # Call the voronoi_process function to preprocess the data, scale it, and split it into training and testing sets
+    X_train, X_test, y_train, y_test = voronoi_process(voronoi_data)
 
 if __name__ == "__main__":
     main()
