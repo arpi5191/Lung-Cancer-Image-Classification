@@ -25,7 +25,10 @@ from stardist.models import StarDist2D
 from scipy.stats import skew, kurtosis
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial import Voronoi, voronoi_plot_2d
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import (confusion_matrix, accuracy_score, precision_score, recall_score, f1_score,
+                             mean_absolute_error, mean_squared_error, r2_score)
 
 def load_channel(tif_path, channel_idx):
     ''' Load the specified channel from a multi-channel TIFF file as a 2D numpy array.
@@ -228,6 +231,33 @@ def voronoi_process(voronoi_data):
     # Return the split datasets for training and testing
     return X_train, X_test, y_train, y_test
 
+def Logistic_Regression(X_train, X_test, y_train, y_test):
+
+    # Create and fit Logistic Regression model on the training dataset with liblinear solver
+    lr_model = LogisticRegression(solver='lbfgs', max_iter=10000, random_state=42)
+    lr_model.fit(X_train, y_train)
+
+    # Run the Logistic Regression model on the testing dataset
+    y_pred_test = lr_model.predict(X_test)
+
+    # Calculate the metrics on the testing dataset
+    accuracy = accuracy_score(y_test, y_pred_test)
+    precision = precision_score(y_test, y_pred_test)
+    recall = recall_score(y_test, y_pred_test)
+    f1 = f1_score(y_test, y_pred_test)
+    mae = mean_absolute_error(y_test, y_pred_test)
+    mse = mean_squared_error(y_test, y_pred_test)
+    r2 = r2_score(y_test, y_pred_test)
+
+    # Print the metrics for the testing dataset
+    print(f'Validation Accuracy: {accuracy:.3f}')
+    print(f'Validation Precision: {precision:.3f}')
+    print(f'Validation Recall: {recall:.3f}')
+    print(f'Validation F1: {f1:.3f}')
+    print(f'Validation Mean Absolute Error: {mae:.3f}')
+    print(f'Validation Mean Squared Error: {mse:.3f}')
+    print(f'Validation Mean R-Squared: {r2:.3f}')
+
 def main():
 
     # Define and parse the command-line arguments for input parameters
@@ -347,6 +377,9 @@ def main():
 
     # Call the voronoi_process function to preprocess the data, scale it, and split it into training and testing sets
     X_train, X_test, y_train, y_test = voronoi_process(voronoi_data)
+
+    # Call the Logistic Regression function to train and test the model using the training and testing data
+    Logistic_Regression(X_train, X_test, y_train, y_test)
 
 if __name__ == "__main__":
     main()
