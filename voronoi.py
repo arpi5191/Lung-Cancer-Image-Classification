@@ -2,7 +2,7 @@
     # Run File: python voronoi.py --nmin 50 --nmax 1000 --didx 0 --d 2
     # Create image: docker build . -t voronoi
     # Get a shell into a container: docker run -it -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi voronoi bash
-    # Run Segmentation: docker run -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_tif:/voronoi_tif -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi voronoi_tif
+    # Run Segmentation: docker run -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/:/ -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi
     # Launch virtual environment (https://www.youtube.com/watch?v=WFIZn6titnc):
       # source ~/miniforge3/bin/activate
       # conda install -c apple tensorflow-deps
@@ -287,11 +287,11 @@ def main():
 
     # Set paths for Cancerous and NotCancerous TIFF directories based on environment
     if os.path.exists('/.dockerenv'):
-        cancer_tif_dir = '/voronoi_tif/Cancerous'
-        no_cancer_tif_dir = '/voronoi_tif/NotCancerous'
+        cancer_tif_dir = '/tif/Cancerous'
+        no_cancer_tif_dir = '/tif/NotCancerous'
     else:
-        cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_tif/Cancerous'
-        no_cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_tif/NotCancerous'
+        cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/Cancerous'
+        no_cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/NotCancerous'
 
     # Verify the Cancerous TIFF directory exists
     if not pathlib.Path(cancer_tif_dir).exists():
