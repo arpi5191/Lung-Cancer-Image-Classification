@@ -137,6 +137,40 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval):
             # The Shapely library's Polygon class is used to facilitate feature extraction and analysis
             polygon = Polygon(coords)
 
+            # Calculate the area of the polygon
+            area = polygon.area
+
+            # Calculate the perimeter (length) of the polygon
+            perimeter = polygon.length
+
+            # Calculate the compactness of the polygon:
+            # This measures how circular the polygon is, where a value of 1 means it is perfectly circular.
+            # The formula is: compactness = (perimeter^2) / (4 * pi * area)
+            compactness = (perimeter * perimeter) / (4 * math.pi * area)
+
+            # Calculate the circularity of the polygon:
+            # Circularity measures the "roundness" of the polygon, where a value of 1 indicates a perfect circle.
+            # The formula is: circularity = (4 * pi * area) / (perimeter^2)
+            circularity = (4 * math.pi * area) / (perimeter * perimeter)
+
+            # Calculate the perimeter (length) of the convex hull of the polygon:
+            # The convex hull is the smallest convex shape that can completely contain the polygon.
+            convex_hull_perimeter = polygon.convex_hull.length
+
+            # Calculate the area of the convex hull of the polygon:
+            # This gives the area of the smallest convex shape that contains the polygon.
+            convex_hull_area = polygon.convex_hull.area
+
+            # Calculate the convexity of the polygon:
+            # Convexity is the ratio of the convex hull's perimeter to the polygon's perimeter.
+            # A value of 1 means the polygon is convex, and values greater than 1 suggest concave portions.
+            convexity = convex_hull_perimeter / perimeter
+
+            # Calculate the solidity of the polygon:
+            # Solidity is the ratio of the polygon's area to the area of its convex hull.
+            # A value of 1 indicates a convex polygon, while values less than 1 indicate concave regions.
+            solidity = area / convex_hull_area
+
     # Return
     return
 
