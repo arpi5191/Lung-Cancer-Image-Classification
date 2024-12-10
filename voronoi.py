@@ -19,6 +19,7 @@ from scipy.ndimage import zoom
 import matplotlib.pyplot as plt
 from csbdeep.utils import normalize
 import skimage.exposure as exposure
+from shapely.geometry import Polygon
 from stardist.models import StarDist2D
 from scipy.spatial import Voronoi, voronoi_plot_2d
 
@@ -73,7 +74,7 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval):
         img_height, img_width = img.shape  # Get the dimensions of the image
 
         # Randomly generate centroids within the image dimensions
-        # Credit to chatGPT: Providing this idea
+        # Credit to chatGPT: General Idea
         centroids = np.array([[random.randint(0, img_width), random.randint(0, img_height)] for _ in range(num_centroids)])
 
         # Create a Voronoi object using the centroids
@@ -98,6 +99,7 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval):
         voronoi_img = np.zeros((img_height, img_width, 3), dtype=np.uint8)  # Ensure 3 channels for RGB
 
         # Iterate through every pixel in the image
+        # Credit to ChatGPT: General Idea
         for x in range(img_width):
             for y in range(img_height):
                 shortest_dist = float('inf')  # Initialize the shortest distance to infinity
@@ -118,6 +120,22 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval):
 
         # If the image is in RGB, convert it to BGR before saving with OpenCV
         cv2.imwrite(final_output_dir, cv2.cvtColor(voronoi_img, cv2.COLOR_RGB2BGR))  # Convert RGB to BGR before saving
+
+        # Credit to ChatGPT: General Idea
+        # Iterate over each region in the Voronoi diagram
+        for region in vor.regions:
+
+            # Skip empty regions or regions that contain '-1', which indicates unbounded regions
+            if region == [] or -1 in region:
+                continue
+
+            # Retrieve the coordinates of the vertices for the current region
+            # The 'region' variable contains indices that map to the vertices in 'vor.vertices'
+            coords = [vor.vertices[i] for i in region]
+
+            # Create a polygon using the coordinates of the vertices for the current Voronoi region
+            # The Shapely library's Polygon class is used to facilitate feature extraction and analysis
+            polygon = Polygon(coords)
 
     # Return
     return
