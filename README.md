@@ -9,6 +9,7 @@ Perform segmentation on the lung images and feed the resulting patches into Conv
      then train a ResNet50 model on the dataset to classify the patches as cancerous or non-cancerous and generate evaluation metrics for the training, validation, and testing phases of the model.
   3) Optional: Run the command python CNNClassifier.py in the terminal, which performs the same task as ResNet50.py but uses a CNN model built from scratch. This CNN model did not work effectively
      on a similar dataset and is still subject to modifications.
+  4) Run the command python voronoi.py in the terminal. This will segment the images and apply the Voronoi algorithm to the centroids. It generates Voronoi diagrams and Voronoi images (assumed). Additionally, it builds a DataFrame containing attributes of each Voronoi region. The script then splits the data, preprocesses it, and runs machine learning models such as Logistic Regression and Random Forest. Please note that this file is still a work in progress.
 
 # Note:
   If 'FileNotFoundError: Found no valid file for the classes Cancerous, NotCancerous. Supported extensions are: .jpg, .jpeg, .png, .ppm, .bmp, .pgm, .tif, .tiff, .webp' error occurs when running
