@@ -92,6 +92,7 @@ def segment_images(tif_paths, classification, nmin, nmax, dapi_channel_idx, down
         if sum(sum(labeling)) == 0:
             print(f"Segmentation failed for {basename}")
 
+        # Credit to ChatGPT: Providing this general idea and guidance on code
         # Process the labeled nuclei to extract contours and patch information
         filtered_contours, size_contours, patches = process_labeling(labeling, nmin, nmax, img, classification, basename)
 
