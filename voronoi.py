@@ -131,6 +131,7 @@ def process_labeling(labeling, nmin, nmax, img, minimum_solidity = 0.8):
                 # If the contour doesn't meet the criteria, mark the region as background (0)
                 labeling[labeling == label] = 0
             else:
+                # Credit to ChatGPT: Providing this calculation
                 # If valid, compute the moments to find the centroid
                 M = cv2.moments(contours[0])
 
