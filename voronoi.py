@@ -24,7 +24,9 @@ from shapely.geometry import Polygon
 from stardist.models import StarDist2D
 from scipy.stats import skew, kurtosis
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV
 from scipy.spatial import Voronoi, voronoi_plot_2d
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (confusion_matrix, accuracy_score, precision_score, recall_score, f1_score,
@@ -47,14 +49,115 @@ def load_channel(tif_path, channel_idx):
     # Rescale the intensity values of the image to a range of 0-255 for consistency
     return exposure.rescale_intensity(channel, in_range='image', out_range=(0, 255)).astype(np.uint8)
 
-def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval, voronoi_data):
+def filter_on_nuclei_size(labeling, nmin, nmax):
+
+    # Flatten the labeling array into a 1D array and count the occurrence of each label (nucleus)
+    # This counts how many pixels are associated with each labeled nucleus
+    segmented_cell_sizes = np.bincount(labeling.ravel())
+
+    # Identify nuclei that are either too small or too large based on the given size thresholds (nmin, nmax)
+    too_small = segmented_cell_sizes < nmin  # Nuclei smaller than the minimum size
+    too_large = segmented_cell_sizes > nmax  # Nuclei larger than the maximum size
+    too_small_or_large = too_small | too_large  # Combine both conditions to identify out-of-range nuclei
+
+    # Set the label of nuclei that are out of the specified size range to 0 (remove them)
+    labeling[too_small_or_large[labeling]] = 0
+
+    # Return the updated labeling with out-of-range nuclei removed
+    return labeling
+
+def distance(x1, x2, y1, y2):
+
+    # Calculate the squared difference in x-coordinates
+    x_diff = (x2 - x1) ** 2
+
+    # Calculate the squared difference in y-coordinates
+    y_diff = (y2 - y1) ** 2
+
+    # Compute the Euclidean distance using the Pythagorean theorem
+    dist = math.sqrt(x_diff + y_diff)
+
+    # Return distance
+    return dist
+
+def compute_solidity(contour, contour_area):
+
+    # Find the convex hull, which is the smallest convex shape that can fully enclose the contour
+    hull = cv2.convexHull(contour)
+
+    # Calculate the area of the convex hull
+    hull_area = cv2.contourArea(hull)
+
+    # Compute solidity: ratio of the area of the actual contour to the area of the convex hull
+    # Solidity = (contour area) / (convex hull area)
+    # If the convex hull area is zero (which can happen if the contour is degenerate), set solidity to 0 to avoid division by zero
+    solidity = contour_area / hull_area if hull_area > 0 else 0
+
+    # Return the computed solidity value
+    return solidity
+
+def process_labeling(labeling, nmin, nmax, img, minimum_solidity = 0.8):
+
+    # Initialize variables to count contours and store centroids
+    contour_count = 0
+    centroids = []
+
+    # Get unique labels from the labeling array (i.e., nuclei labels)
+    unique_labels = np.unique(labeling)
+
+    # Iterate through each unique label
+    for label in unique_labels:
+        # Ignore the background label (0)
+        if label != 0:
+
+            # Create a binary mask for the current label (1 for the current region, 0 elsewhere)
+            binary_mask = np.where(labeling == label, 1, 0).astype(np.uint8)
+
+            # Find contours in the binary mask using OpenCV's findContours method
+            contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            # Ensure at least one contour is found
+            if len(contours) == 0:
+                continue
+
+            # Calculate the area of the first contour (there should only be one contour per region)
+            contour_area = cv2.contourArea(contours[0])
+
+            # Calculate the solidity of the contour (ratio of contour area to convex hull area)
+            solidity = compute_solidity(contours[0], contour_area)
+
+            # Check if the contour meets the size and solidity criteria
+            if contour_area < nmin or contour_area > nmax or solidity < minimum_solidity:
+                # If the contour doesn't meet the criteria, mark the region as background (0)
+                labeling[labeling == label] = 0
+            else:
+                # If valid, compute the moments to find the centroid
+                M = cv2.moments(contours[0])
+
+                # Calculate the centroid (cx, cy) using the moments (m10/m00 and m01/m00)
+                if M['m00'] != 0:  # Ensure no division by zero
+                    cx = int(M['m10'] / M['m00'])
+                    cy = int(M['m01'] / M['m00'])
+
+                    # Add the valid centroid to the centroids list
+                    centroids.append((cx, cy))
+
+                # Increment the contour count
+                contour_count += 1
+
+    # Return the total count of valid contours and the list of centroids
+    return contour_count, centroids
+
+def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_interval, voronoi_data):
+
+    # Load the pre-trained StarDist model for nuclei detection
+    model = StarDist2D.from_pretrained('2D_versatile_fluo')
 
     # Iterate through each .tif file path
     for tif_path in tif_paths:
 
         # Extract the base name of the file (without extension) for labeling purposes
         basename = tif_path.name.rstrip('.tif')
-        # print("Segmenting tif path: {}".format(basename))
 
         # Check if the script is running in a Docker environment
         if os.path.exists('/.dockerenv'):
@@ -77,12 +180,23 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval, vo
         img = load_channel(tif_path, dapi_channel_idx)
         img = img[::downsample_interval, ::downsample_interval]
 
-        num_centroids = 10  # Number of centroids for Voronoi diagram
-        img_height, img_width = img.shape  # Get the dimensions of the image
+        # Predict nuclei instances using the StarDist model
+        # Downsample the labeling array using nearest-neighbor interpolation
+        # Filter nuclei based on size, keeping only those within the specified pixel range (nmin to nmax)
+        labeling, _ = model.predict_instances(normalize(img))
+        labeling = zoom(labeling, downsample_interval, order=0)
+        labeling = filter_on_nuclei_size(labeling, nmin, nmax)
 
-        # Randomly generate centroids within the image dimensions
-        # Credit to chatGPT: General Idea
-        centroids = np.array([[random.randint(0, img_width), random.randint(0, img_height)] for _ in range(num_centroids)])
+        # Check if segmentation was successful by evaluating the sum of the labeled areas
+        if sum(sum(labeling)) == 0:
+            continue
+
+        # Process the labeled nuclei to extract valid contours and compute their centroids
+        contour_count, centroids = process_labeling(labeling, nmin, nmax, img)
+
+        print(f"Processing file: {tif_path}")
+        print(f"Number of valid contours (nuclei): {contour_count}")
+        print()
 
         # Create a Voronoi object using the centroids
         vor = Voronoi(centroids)
@@ -101,6 +215,9 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval, vo
 
         # Generate a random RGB color for each centroid
         colors = [np.random.randint(0, 256, 3) for _ in range(len(centroids))]
+
+        # Get the width and height of the image
+        img_height, img_width = img.shape
 
         # Initialize the Voronoi image as a 3D array (height, width, 3) to store RGB values
         voronoi_img = np.zeros((img_height, img_width, 3), dtype=np.uint8)  # Ensure 3 channels for RGB
@@ -191,20 +308,6 @@ def voronoi(tif_paths, classification, dapi_channel_idx, downsample_interval, vo
     # Return the DataFrame containing the Voronoi features
     return voronoi_data
 
-def distance(x1, x2, y1, y2):
-
-    # Calculate the squared difference in x-coordinates
-    x_diff = (x2 - x1) ** 2
-
-    # Calculate the squared difference in y-coordinates
-    y_diff = (y2 - y1) ** 2
-
-    # Compute the Euclidean distance using the Pythagorean theorem
-    dist = math.sqrt(x_diff + y_diff)
-
-    # Return distance
-    return dist
-
 def voronoi_process(voronoi_data):
 
     # Map the 'Diagnosis' column values to 1 for 'Cancerous' and 0 for 'NotCancerous'
@@ -222,7 +325,7 @@ def voronoi_process(voronoi_data):
     voronoi_data_scaled = pd.DataFrame(voronoi_data_scaled, columns=voronoi_data.columns)
 
     # Split the data into training and testing sets, using 70% for training and 30% for testing
-    X_train, X_test, y_train, y_test = train_test_split(voronoi_data, labels, test_size=0.3, random_state=42, shuffle=True)
+    X_train, X_test, y_train, y_test = train_test_split(voronoi_data_scaled, labels, test_size=0.25, random_state=42, shuffle=True)
 
     # Convert the 'Diagnosis' column from y_train and y_test into lists for model training
     y_train = y_train['Diagnosis'].tolist()
@@ -234,7 +337,7 @@ def voronoi_process(voronoi_data):
 def Logistic_Regression(X_train, X_test, y_train, y_test):
 
     # Create and fit Logistic Regression model on the training dataset with liblinear solver
-    lr_model = LogisticRegression(solver='lbfgs', max_iter=10000, random_state=42)
+    lr_model = LogisticRegression(solver='liblinear', max_iter=10000, C=500, random_state=42)
     lr_model.fit(X_train, y_train)
 
     # Run the Logistic Regression model on the testing dataset
@@ -250,6 +353,83 @@ def Logistic_Regression(X_train, X_test, y_train, y_test):
     r2 = r2_score(y_test, y_pred_test)
 
     # Print the metrics for the testing dataset
+    print("Logistic Regression Results:")
+    print(f'Testing Accuracy: {accuracy:.3f}')
+    print(f'Testing Precision: {precision:.3f}')
+    print(f'Testing Recall: {recall:.3f}')
+    print(f'Testing F1: {f1:.3f}')
+    print(f'Testing Mean Absolute Error: {mae:.3f}')
+    print(f'Testing Mean Squared Error: {mse:.3f}')
+    print(f'Testing Mean R-Squared: {r2:.3f}')
+
+def Random_Forest(X_train, X_test, y_train, y_test):
+
+    # Create and fit Random Forest model on the training dataset
+    rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf_model.fit(X_train, y_train)
+
+    # Run the Random Forest model on the testing dataset
+    y_pred_test = rf_model.predict(X_test)
+
+    # Calculate the metrics on the testing dataset
+    accuracy = accuracy_score(y_test, y_pred_test)
+    precision = precision_score(y_test, y_pred_test)
+    recall = recall_score(y_test, y_pred_test)
+    f1 = f1_score(y_test, y_pred_test)
+    mae = mean_absolute_error(y_test, y_pred_test)
+    mse = mean_squared_error(y_test, y_pred_test)
+    r2 = r2_score(y_test, y_pred_test)
+
+    # Print the metrics for the testing dataset
+    print("Random Forest Classifier Results:")
+    print(f'Testing Accuracy: {accuracy:.3f}')
+    print(f'Testing Precision: {precision:.3f}')
+    print(f'Testing Recall: {recall:.3f}')
+    print(f'Testing F1: {f1:.3f}')
+    print(f'Testing Mean Absolute Error: {mae:.3f}')
+    print(f'Testing Mean Squared Error: {mse:.3f}')
+    print(f'Testing Mean R-Squared: {r2:.3f}')
+
+def Random_Forest_CV(X_train, X_test, y_train, y_test):
+
+    # Define the parameter grid for hyperparameter tuning
+    # - 'n_estimators': Number of trees in the forest
+    # - 'min_samples_split': Minimum number of samples required to split an internal node
+    # - 'min_samples_leaf': Minimum number of samples required to be at a leaf node
+    param_grid = {
+        'n_estimators': [50, 100, 150],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 5]
+    }
+
+    # Initialize the Random Forest Regressor model
+    # - 'max_depth': No limit on tree depth
+    # - 'bootstrap': Use bootstrap samples to build trees
+    rf_model = RandomForestClassifier(max_depth=None, bootstrap=True, random_state=42)
+
+    # Perform hyperparameter tuning using GridSearchCV
+    # - 'cv': Number of cross-validation folds
+    # - 'scoring': Evaluation metric (negative mean absolute error in this case)
+    grid_search = GridSearchCV(estimator=rf_model, param_grid=param_grid, cv=20, scoring='neg_mean_absolute_error')
+    grid_search.fit(X_train, y_train)
+
+    # Get the best model based on GridSearchCV results
+    best_rf_model = grid_search.best_estimator_
+
+    # Predict on the test data using the best model
+    y_pred_test = best_rf_model.predict(X_test)
+
+    # Calculate the metrics on the testing dataset
+    accuracy = accuracy_score(y_test, y_pred_test)
+    precision = precision_score(y_test, y_pred_test)
+    recall = recall_score(y_test, y_pred_test)
+    f1 = f1_score(y_test, y_pred_test)
+    mae = mean_absolute_error(y_test, y_pred_test)
+    mse = mean_squared_error(y_test, y_pred_test)
+    r2 = r2_score(y_test, y_pred_test)
+
+    # Print the metrics for the testing dataset
+    print("Random Forest Classifier Results After Cross-Validation:")
     print(f'Testing Accuracy: {accuracy:.3f}')
     print(f'Testing Precision: {precision:.3f}')
     print(f'Testing Recall: {recall:.3f}')
@@ -261,7 +441,9 @@ def Logistic_Regression(X_train, X_test, y_train, y_test):
 def main():
 
     # Define and parse the command-line arguments for input parameters
-    parser = argparse.ArgumentParser(description="Parameters for voronoi diagrams and images in TIFF images.")
+    parser = argparse.ArgumentParser(description="Segmentation parameters for nuclei detection in TIFF images.")
+    parser.add_argument('--nmin', '--nuclei-min-pixels', type=int, help="Minimum number of pixels for a valid nucleus.")
+    parser.add_argument('--nmax', '--nuclei-max-pixels', type=int, help="Maximum number of pixels for a valid nucleus.")
     parser.add_argument('--didx', '--dapi-channel-idx', type=int, help="Index of the DAPI channel (typically 0).")
     parser.add_argument('--d', '--downsample-interval', type=int, help="Factor by which to downsample the image.")
     args = parser.parse_args()
@@ -372,8 +554,8 @@ def main():
     voronoi_data = pd.DataFrame(columns=columns)
 
     # Process cancerous and non-cancerous image data using the voronoi function and update the DataFrame
-    voronoi_data = voronoi(cancer_tif_paths, "Cancerous", args.didx, args.d, voronoi_data)
-    voronoi_data = voronoi(no_cancer_tif_paths, "NotCancerous", args.didx, args.d, voronoi_data)
+    voronoi_data = voronoi(cancer_tif_paths, "Cancerous", args.nmin, args.nmax, args.didx, args.d, voronoi_data)
+    voronoi_data = voronoi(no_cancer_tif_paths, "NotCancerous", args.nmin, args.nmax, args.didx, args.d, voronoi_data)
 
     # Call the voronoi_process function to preprocess the data, scale it, and split it into training and testing sets
     X_train, X_test, y_train, y_test = voronoi_process(voronoi_data)
@@ -383,6 +565,18 @@ def main():
 
     # Call the Logistic Regression function to train and test the model using the training and testing data
     Logistic_Regression(X_train, X_test, y_train, y_test)
+
+    # Give a line of space
+    print()
+
+    # Call the Random Forest function to train and test the model using the training and testing data
+    Random_Forest(X_train, X_test, y_train, y_test)
+
+    # Give a line of space
+    print()
+
+    # Perform Random Forest regression with hyperparameter tuning using cross-validation
+    Random_Forest_CV(X_train, X_test, y_train, y_test)
 
 if __name__ == "__main__":
     main()
