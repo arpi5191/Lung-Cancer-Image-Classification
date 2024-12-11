@@ -1,6 +1,6 @@
 # Lung-Cancer-Image-Classification
 
-Performs segmentation on lung images and processes the resulting patches using Convolutional Neural Networks (CNNs) to classify them as either cancerous or non-cancerous. Additionally, it applies Voronoi algorithms to the centroids (valid nuclei) of each image and utilizes machine learning models, such as Logistic Regression and Random Forest, to classify each Voronoi region based on its attributes as cancerous or non-cancerous.
+Performs segmentation on lung images and processes the resulting patches with Convolutional Neural Networks (CNNs) to classify them as cancerous or non-cancerous. Additionally, it applies Voronoi algorithms to the centroids (valid nuclei) of each image and leverages machine learning models, such as Logistic Regression and Random Forest, to classify each Voronoi region as cancerous or non-cancerous based on its attributes
 
 # Instructions:
   1) Run the command 'python seg.py --nmin nmin --nmax nmax --didx dapi --d downsizefactor' in the terminal to perform segmentation on the images in the tif folder. This will create a patch around
