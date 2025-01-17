@@ -214,7 +214,7 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
 
         # Plot the Voronoi diagram for visualization
         fig, ax = plt.subplots(figsize=(8, 8))
-        voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='orange', line_width=2, alpha=0.2)
+        voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='orange', line_width=2, alpha=0.3)
         ax.axis('off')  # Hide axis labels and ticks
 
         # Save the Voronoi diagram plot
