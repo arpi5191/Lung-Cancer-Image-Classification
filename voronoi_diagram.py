@@ -16,8 +16,10 @@ import tifffile
 import argparse
 import numpy as np
 import pandas as pd
+from PIL import Image
 from scipy.ndimage import zoom
 import matplotlib.pyplot as plt
+from skimage import img_as_ubyte
 from csbdeep.utils import normalize
 import skimage.exposure as exposure
 from shapely.geometry import Polygon
@@ -154,65 +156,93 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
     # Load the pre-trained StarDist model for nuclei detection
     model = StarDist2D.from_pretrained('2D_versatile_fluo')
 
-    # Iterate through each .tif file path
+    # Process each .tif file
     for tif_path in tif_paths:
 
-        # Extract the base name of the file (without extension) for labeling purposes
+        # Extract the base file name (without extension) for output directory naming
         basename = tif_path.name.rstrip('.tif')
 
-        # Check if the script is running in a Docker environment
+        # Determine output directory based on the environment (Docker or local)
         if os.path.exists('/.dockerenv'):
-            output_dir = f'/voronoi/{classification}/{basename}'  # Path for Docker
+            output_dir = f'/voronoi/{classification}/{basename}'  # Docker environment
         else:
-            # Path for local machine
-            output_dir = f'/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi/{classification}/{basename}'
+            output_dir = f'/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi/{classification}/{basename}'  # Local machine
 
         # Create the output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
 
-        # Confirm if the directory was created successfully
+        # Confirm directory creation
         if os.path.exists(output_dir):
             print(f"Directory '{output_dir}' created successfully.")
         else:
             print(f"Failed to create the directory '{output_dir}'.")
 
-        # Load and process the DAPI channel image
-        # Downsample the image by taking every nth pixel, as specified by downsample_interval
+        # Load the DAPI channel image for nuclei segmentation
         img = load_channel(tif_path, dapi_channel_idx)
+
+        # Downsample the image by keeping every nth pixel, specified by downsample_interval
         img = img[::downsample_interval, ::downsample_interval]
 
-        # Predict nuclei instances using the StarDist model
-        # Downsample the labeling array using nearest-neighbor interpolation
-        # Filter nuclei based on size, keeping only those within the specified pixel range (nmin to nmax)
+        # Use the StarDist model to predict nuclei instances
         labeling, _ = model.predict_instances(normalize(img))
+
+        # Downsample the segmentation labels to match the downsampling of the image
         labeling = zoom(labeling, downsample_interval, order=0)
+
+        # Filter nuclei based on size (keep only within the range [nmin, nmax])
         labeling = filter_on_nuclei_size(labeling, nmin, nmax)
 
-        # Check if segmentation was successful by evaluating the sum of the labeled areas
+        # Skip further processing if no nuclei are detected
         if sum(sum(labeling)) == 0:
             continue
 
-        # Process the labeled nuclei to extract valid contours and compute their centroids
+        # Save the downsampled DAPI image
+        image_file = os.path.join(output_dir, "voronoi_image.png")
+        cv2.imwrite(image_file, img)
+        print(f"Image saved at {image_file}")
+
+        # Process nuclei to extract contours and calculate centroids
         contour_count, centroids = process_labeling(labeling, nmin, nmax, img)
 
         print(f"Processing file: {tif_path}")
         print(f"Number of valid contours (nuclei): {contour_count}")
         print()
 
-        # Create a Voronoi object using the centroids
+        # Generate a Voronoi diagram using the centroids
+        # Credit to ChatGPT: Showing me the general idea for how to generate voronoi diagrams
         vor = Voronoi(centroids)
 
         # Plot the Voronoi diagram for visualization
-        # Credit to ChatGPT: Providing code to generate plot
         fig, ax = plt.subplots(figsize=(8, 8))
-        voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='orange')  # Plot the Voronoi diagram with orange lines
-        ax.set_title("Voronoi Diagram")  # Set the title of the plot
-        ax.axis('off')  # Turn off axis labels and ticks
+        voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='orange', line_width=2, alpha=0.2)
+        ax.axis('off')  # Hide axis labels and ticks
 
-        # Save the plot as a PNG file
-        final_output_dir = output_dir + "/voronoi_diagram"
-        fig.savefig(final_output_dir, bbox_inches='tight', dpi=300)  # Save the figure with high DPI for quality
-        plt.close(fig)  # Close the figure after saving to free memory
+        # Save the Voronoi diagram plot
+        final_output_dir = output_dir + "/voronoi_diagram.png"
+        fig.savefig(final_output_dir, bbox_inches='tight', dpi=300)  # High DPI for better quality
+        plt.close(fig)  # Close figure to release memory
+
+        # Load the tumor image (base) and the Voronoi overlay
+        tumor_image_path = output_dir + "/voronoi_image.png"
+        overlay_image_path = output_dir + "/voronoi_diagram.png"
+        tumor_image = Image.open(tumor_image_path).convert("RGBA")
+        overlay_image = Image.open(overlay_image_path).convert("RGBA")
+
+        # Ensure the overlay image matches the base image size
+        if overlay_image.size != tumor_image.size:
+            print(f"Resizing overlay image from {overlay_image.size} to {tumor_image.size}")
+            overlay_image = overlay_image.resize(tumor_image.size)
+
+        # Blend the tumor image and the Voronoi overlay with transparency
+        # Credit to ChatGPT: Showing me how to overlay the images
+        blended_image = Image.blend(tumor_image, overlay_image, alpha=0.4)
+
+        # Save the final blended image
+        output_image_path = output_dir + "/blended_image.png"
+        blended_image.save(output_image_path, format="PNG")
+
+        # Print message if the image is saved successfully
+        print(f"Output image saved successfully at {output_image_path}")
 
 def main():
 
