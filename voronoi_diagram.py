@@ -1,5 +1,5 @@
 # To run:
-    # Run File: python voronoi.py --didx 0 --d 2
+    # Run File: python voronoi_diagram.py --nmin 1250 --nmax 10000000 --didx 0 --d 2
     # Create image: docker build . -t voronoi
     # Get a shell into a container: docker run -it -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi voronoi bash
     # Run Segmentation: docker run -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/:/ -v /Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi:/voronoi
@@ -20,9 +20,12 @@ from PIL import Image
 from scipy.ndimage import zoom
 import matplotlib.pyplot as plt
 from skimage import img_as_ubyte
-from csbdeep.utils import normalize
+from skimage.morphology import disk
 import skimage.exposure as exposure
+from skimage.color import label2rgb
+from csbdeep.utils import normalize
 from shapely.geometry import Polygon
+from skimage.transform import resize
 from stardist.models import StarDist2D
 from scipy.stats import skew, kurtosis
 from sklearn.preprocessing import StandardScaler
@@ -31,6 +34,7 @@ from scipy.spatial import Voronoi, voronoi_plot_2d
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
+from skimage.filters import median, threshold_otsu, sobel
 from sklearn.metrics import (confusion_matrix, accuracy_score, precision_score, recall_score, f1_score,
                              mean_absolute_error, mean_squared_error, r2_score)
 
@@ -51,11 +55,11 @@ def load_channel(tif_path, channel_idx):
     # Rescale the intensity values of the image to a range of 0-255 for consistency
     return exposure.rescale_intensity(channel, in_range='image', out_range=(0, 255)).astype(np.uint8)
 
-def filter_on_nuclei_size(labeling, nmin, nmax):
+def filter_on_nuclei_size(labelling, nmin, nmax):
 
-    # Flatten the labeling array into a 1D array and count the occurrence of each label (nucleus)
+    # Flatten the labelling array into a 1D array and count the occurrence of each label (nucleus)
     # This counts how many pixels are associated with each labeled nucleus
-    segmented_cell_sizes = np.bincount(labeling.ravel())
+    segmented_cell_sizes = np.bincount(labelling.ravel())
 
     # Identify nuclei that are either too small or too large based on the given size thresholds (nmin, nmax)
     too_small = segmented_cell_sizes < nmin  # Nuclei smaller than the minimum size
@@ -63,10 +67,10 @@ def filter_on_nuclei_size(labeling, nmin, nmax):
     too_small_or_large = too_small | too_large  # Combine both conditions to identify out-of-range nuclei
 
     # Set the label of nuclei that are out of the specified size range to 0 (remove them)
-    labeling[too_small_or_large[labeling]] = 0
+    labelling[too_small_or_large[labelling]] = 0
 
-    # Return the updated labeling with out-of-range nuclei removed
-    return labeling
+    # Return the updated labelling with out-of-range nuclei removed
+    return labelling
 
 def distance(x1, x2, y1, y2):
 
@@ -98,151 +102,258 @@ def compute_solidity(contour, contour_area):
     # Return the computed solidity value
     return solidity
 
-def process_labeling(labeling, nmin, nmax, img, minimum_solidity = 0.8):
+def process_labelling(labelling, nmin, nmax, img, minimum_solidity=0.7):
 
-    # Initialize variables to count contours and store centroids
-    contour_count = 0
-    centroids = []
+    centroids = []  # List to store centroids of valid regions
+    label_contours = {}  # Dictionary to store contours for each label
 
-    # Get unique labels from the labeling array (i.e., nuclei labels)
-    unique_labels = np.unique(labeling)
+    # Get unique labels from the labelling array (i.e., all labeled regions)
+    unique_labels = np.unique(labelling)
 
     # Iterate through each unique label
     for label in unique_labels:
-        # Ignore the background label (0)
-        if label != 0:
+        if label != 0:  # Ignore the background label (assumed to be 0)
+            # Create a binary mask for the current label
+            binary_mask = np.where(labelling == label, 1, 0).astype(np.uint8)
 
-            # Create a binary mask for the current label (1 for the current region, 0 elsewhere)
-            binary_mask = np.where(labeling == label, 1, 0).astype(np.uint8)
+            # Find contours of the current region
+            contours, _ = cv2.findContours(binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-            # Find contours in the binary mask using OpenCV's findContours method
-            contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            # Ensure at least one contour is found
-            if len(contours) == 0:
+            # If no contours are found, remove the label from the labeled image
+            if len(contours) != 1:
+                labelling[labelling == label] = 0  # Set all pixels of this label to 0
                 continue
-
-            # Calculate the area of the first contour (there should only be one contour per region)
-            contour_area = cv2.contourArea(contours[0])
-
-            # Calculate the solidity of the contour (ratio of contour area to convex hull area)
-            solidity = compute_solidity(contours[0], contour_area)
-
-            # Check if the contour meets the size and solidity criteria
-            if contour_area < nmin or contour_area > nmax or solidity < minimum_solidity:
-                # If the contour doesn't meet the criteria, mark the region as background (0)
-                labeling[labeling == label] = 0
             else:
-                # Credit to ChatGPT: Providing this calculation
-                # If valid, compute the moments to find the centroid
-                M = cv2.moments(contours[0])
+                # Store the contours for the current label
+                label_contours[label] = contours
 
-                # Calculate the centroid (cx, cy) using the moments (m10/m00 and m01/m00)
-                if M['m00'] != 0:  # Ensure no division by zero
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
+            # Iterate over each contour to validate and calculate centroids
+            for contour in contours:
+                # Calculate the area of the contour
+                contour_area = cv2.contourArea(contour)
+
+                # Calculate the solidity of the contour
+                solidity = compute_solidity(contour, contour_area)
+
+                # Debugging: Print contour area and solidity values for inspection
+                print(f"Label: {label}, Area: {contour_area}, Solidity: {solidity}")
+
+                # Check if the contour meets the area and solidity criteria
+                if contour_area >= nmin and contour_area <= nmax and solidity >= minimum_solidity:
+                    # Calculate the centroid using moments
+                    M = cv2.moments(contour)
+                    if M['m00'] != 0:  # Avoid division by zero
+                        cx = int(M['m10'] / M['m00'])  # x-coordinate of the centroid
+                        cy = int(M['m01'] / M['m00'])  # y-coordinate of the centroid
+                    else:
+                        # If moments are zero, calculate centroid as the mean of contour points
+                        cx, cy = int(contour[:, :, 0].mean()), int(contour[:, :, 1].mean())
 
                     # Add the valid centroid to the centroids list
-                    centroids.append((cx, cy))
+                    centroids.append(np.array([cx, cy]))
 
-                # Increment the contour count
-                contour_count += 1
-
-    # Return the total count of valid contours and the list of centroids
-    return contour_count, centroids
+    # Return the list of valid centroids and contours for each label
+    return centroids, label_contours
 
 def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_interval):
 
     # Load the pre-trained StarDist model for nuclei detection
     model = StarDist2D.from_pretrained('2D_versatile_fluo')
 
-    # Process each .tif file
+    # Process each .tif file in the provided paths
     for tif_path in tif_paths:
+        # Extract the base name of the file for labelling and output directory naming
+        basename = tif_path.stem  # Use .stem to get the file name without extension
 
-        # Extract the base file name (without extension) for output directory naming
-        basename = tif_path.name.rstrip('.tif')
-
-        # Determine output directory based on the environment (Docker or local)
+        # Determine the output directory based on the environment (Docker or local machine)
         if os.path.exists('/.dockerenv'):
-            output_dir = f'/voronoi/{classification}/{basename}'  # Docker environment
+            output_dir = f'/voronoi/{classification}/{basename}'  # For Docker environment
         else:
-            output_dir = f'/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi/{classification}/{basename}'  # Local machine
+            # For local environment
+            output_dir = os.path.join(
+                "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi",
+                classification,
+                basename,
+            )
 
-        # Create the output directory if it doesn't exist
+        # Create the output directory if it doesn't already exist
         os.makedirs(output_dir, exist_ok=True)
 
-        # Confirm directory creation
+        # Confirm successful creation of the output directory
         if os.path.exists(output_dir):
             print(f"Directory '{output_dir}' created successfully.")
         else:
             print(f"Failed to create the directory '{output_dir}'.")
 
-        # Load the DAPI channel image for nuclei segmentation
-        img = load_channel(tif_path, dapi_channel_idx)
+        # Load and downsample the DAPI channel image for nuclei detection
+        original_img = load_channel(tif_path, dapi_channel_idx)
+        print(f"Number of dimensions: {original_img.ndim if isinstance(original_img, np.ndarray) else 'Not a NumPy array'}")
+        original_img = original_img[::downsample_interval, ::downsample_interval]
 
-        # Downsample the image by keeping every nth pixel, specified by downsample_interval
-        img = img[::downsample_interval, ::downsample_interval]
+        # Apply Gaussian blur to reduce noise while preserving structures
+        original_img = cv2.GaussianBlur(original_img, (5, 5), 0)
 
-        # Use the StarDist model to predict nuclei instances
-        labeling, _ = model.predict_instances(normalize(img))
+        # Apply median filter to further remove noise and smooth the image
+        original_img = median(original_img, disk(3)).astype(np.uint8)
 
-        # Downsample the segmentation labels to match the downsampling of the image
-        labeling = zoom(labeling, downsample_interval, order=0)
+        # Perform instance segmentation using the pre-trained StarDist model
+        labelling, _ = model.predict_instances(normalize(original_img))
 
-        # Filter nuclei based on size (keep only within the range [nmin, nmax])
-        labeling = filter_on_nuclei_size(labeling, nmin, nmax)
+        # Scale up the labelling array back to the original size
+        labelling = zoom(labelling, downsample_interval, order=0)
 
-        # Skip further processing if no nuclei are detected
-        if sum(sum(labeling)) == 0:
+        # Filter nuclei based on size constraints
+        labelling = filter_on_nuclei_size(labelling, nmin, nmax)
+
+        # Skip further processing if no valid nuclei are detected
+        if sum(sum(labelling)) == 0:
             continue
 
-        # Save the downsampled DAPI image
-        image_file = os.path.join(output_dir, "voronoi_image.png")
-        cv2.imwrite(image_file, img)
-        print(f"Image saved at {image_file}")
+        # Save the original image to the output directory
+        original_img_path = os.path.join(output_dir, "original_image.png")
+        cv2.imwrite(original_img_path, original_img)
+        print(f"Original image saved at {original_img_path}")
 
-        # Process nuclei to extract contours and calculate centroids
-        contour_count, centroids = process_labeling(labeling, nmin, nmax, img)
+        # Apply brightness adjustment to the image for better visualization
+        brightness_increase = 10  # Value for increasing brightness
+        original_bright_img = cv2.convertScaleAbs(original_img, alpha=2, beta=brightness_increase)
+        brightened_img_path = os.path.join(output_dir, "brightened_image.png")
+        cv2.imwrite(brightened_img_path, original_bright_img)  # Save the brightened image
+        print(f"Brightened image saved at {brightened_img_path}")
 
-        print(f"Processing file: {tif_path}")
-        print(f"Number of valid contours (nuclei): {contour_count}")
-        print()
+        # Visualize and display the labeled image using matplotlib
+        fig, ax = plt.subplots(figsize=(8, 8))  # Create a figure and axis with specified size for visualization
+        labeled_img = label2rgb(labelling, bg_label=0)  # Generate a color-labeled image from the input labelling
+        ax.imshow(labeled_img)  # Display the labeled image on the axis
+        ax.axis('off')  # Turn off axis display for cleaner visualization
 
-        # Generate a Voronoi diagram using the centroids
-        # Credit to ChatGPT: Showing me the general idea for how to generate voronoi diagrams
+        # Save the labeled image plot to the specified output directory
+        labeled_img_path = os.path.join(output_dir, "labelling_diagram.png")
+        plt.savefig(labeled_img_path, bbox_inches='tight')  # Save the plot as an image
+        plt.close(fig)  # Close the figure to free up memory
+        print(f"Labeled diagram saved at {labeled_img_path}")
+
+        # Process the labelling to extract centroids and contours of detected regions
+        centroids, contours = process_labelling(labelling, nmin, nmax, original_img)
+
+        # Create a blank canvas with the same dimensions as the labelling array for visualizing contours
+        contour_canvas = np.zeros_like(labelling, dtype=np.uint8)
+
+        # Draw the contours of each labeled region onto the blank canvas
+        for label, contour_list in contours.items():
+            # Draw the contours for the current label using white color and a specified thickness
+            cv2.drawContours(contour_canvas, contour_list, -1, (255, 255, 255), thickness=4)
+
+        # Define the path to save the contour visualization image
+        contours_img_path = os.path.join(output_dir, "contours_visualization.png")
+
+        # Save the contour visualization image to the specified path
+        cv2.imwrite(contours_img_path, contour_canvas)
+
+        # Convert the list of centroids into a NumPy array for easier processing
+        centroids = np.array(centroids)
+
+        # Create a blank canvas with the same dimensions as the labelling array for visualizing centroids
+        centroids_canvas = np.zeros_like(labelling, dtype=np.uint8)
+
+        # Loop through each centroid to draw it on the canvas
+        for centroid in centroids:
+            # Convert centroid coordinates to integer values
+            x, y = map(int, centroid)
+
+            # Debugging: Print the coordinates of each centroid
+            print(f"Centroid coordinates: ({x}, {y})")
+
+            # Check if the centroid is within the bounds of the canvas
+            # Ensure that both x and y are within the image dimensions (width, height)
+            if 0 <= x < centroids_canvas.shape[1] and 0 <= y < centroids_canvas.shape[0]:
+                # Draw a red filled circle at the centroid location (with color set to white in this case)
+                cv2.circle(centroids_canvas, (x, y), radius=5, color=(255, 255, 255), thickness=-1)
+            else:
+                # Print a message if the centroid is out of bounds for the canvas
+                print(f"Centroid ({x}, {y}) is out of bounds for the canvas dimensions: {centroids_canvas.shape}")
+
+        # Define the path to save the centroids visualization image
+        centroids_img_path = os.path.join(output_dir, "centroids_visualization.png")
+
+        # Save the centroids visualization image to the specified path
+        cv2.imwrite(centroids_img_path, centroids_canvas)
+
+        # Print confirmation message for the saved centroids visualization
+        print(f"Centroids visualization saved at {centroids_img_path}")
+
+        # Create a Voronoi diagram using the computed centroids
         vor = Voronoi(centroids)
 
-        # Plot the Voronoi diagram for visualization
+        # Generate the figure and axis for plotting the Voronoi diagram
         fig, ax = plt.subplots(figsize=(8, 8))
-        voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='orange', line_width=2, alpha=0.3)
-        ax.axis('off')  # Hide axis labels and ticks
+        voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='orange', line_width=2)
+        ax.axis('off')
 
-        # Save the Voronoi diagram plot
-        final_output_dir = output_dir + "/voronoi_diagram.png"
-        fig.savefig(final_output_dir, bbox_inches='tight', dpi=300)  # High DPI for better quality
-        plt.close(fig)  # Close figure to release memory
+        # Define the output file path for saving the Voronoi diagram
+        final_output_dir = os.path.join(output_dir, "voronoi_diagram.png")
+        fig.savefig(final_output_dir, bbox_inches='tight', dpi=500)
+        plt.close(fig)
 
-        # Load the tumor image (base) and the Voronoi overlay
-        tumor_image_path = output_dir + "/voronoi_image.png"
-        overlay_image_path = output_dir + "/voronoi_diagram.png"
-        tumor_image = Image.open(tumor_image_path).convert("RGBA")
-        overlay_image = Image.open(overlay_image_path).convert("RGBA")
+        # Print the confirmation message indicating the saved Voronoi diagram
+        print(f"Voronoi diagram saved at {final_output_dir}")
 
-        # Ensure the overlay image matches the base image size
-        if overlay_image.size != tumor_image.size:
-            print(f"Resizing overlay image from {overlay_image.size} to {tumor_image.size}")
-            overlay_image = overlay_image.resize(tumor_image.size)
+        # Open the brightened image, labelling diagram, contours visualization, centroids visualization, and Voronoi diagram for overlay
+        brightened_image_path = os.path.join(output_dir, "brightened_image.png")
+        labelling_visualization_path = os.path.join(output_dir, "labelling_diagram.png")
+        contours_visualization_path = os.path.join(output_dir, "contours_visualization.png")
+        centroids_visualization_path = os.path.join(output_dir, "centroids_visualization.png")
+        voronoi_diagram_path = os.path.join(output_dir, "voronoi_diagram.png")
 
-        # Blend the tumor image and the Voronoi overlay with transparency
-        # Credit to ChatGPT: Showing me how to overlay the images
-        blended_image = Image.blend(tumor_image, overlay_image, alpha=0.4)
+        # Open the images as RGBA for overlaying
+        original_image = Image.open(brightened_image_path).convert("RGBA")
+        labelling_visualization = Image.open(labelling_visualization_path).convert("RGBA")
+        contours_visualization = Image.open(contours_visualization_path).convert("RGBA")
+        centroids_visualization = Image.open(centroids_visualization_path).convert("RGBA")
+        voronoi_diagram = Image.open(voronoi_diagram_path).convert("RGBA")
 
-        # Save the final blended image
-        output_image_path = output_dir + "/blended_image.png"
-        blended_image.save(output_image_path, format="PNG")
+        # Resize the labelling visualization image to match the original image size, if necessary
+        if original_image.size != labelling_visualization.size:
+            print(f"Resizing labelling visualization image from {labelling_visualization.size} to {original_image.size}")
+            labelling_visualization = labelling_visualization.resize(original_image.size)
 
-        # Print message if the image is saved successfully
-        print(f"Output image saved successfully at {output_image_path}")
+        # Combine the original bright image with the labeled image and save the result
+        original_labelled_img = np.hstack((original_image, labelling_visualization))
+        final_output_dir = os.path.join(output_dir, "original_labelled_image.png")
+        cv2.imwrite(final_output_dir, original_labelled_img)
+
+        # Resize the contours visualization image to match the labelling visualization size, if necessary
+        if labelling_visualization.size != contours_visualization.size:
+            print(f"Resizing contours visualization image from {contours_visualization.size} to {labelling_visualization.size}")
+            contours_visualization = contours_visualization.resize(labelling_visualization.size)
+
+        # Combine the labelling visualization and contours visualization images side by side
+        labelling_contours_img = np.hstack((labelling_visualization, contours_visualization))
+        final_output_dir = os.path.join(output_dir, "labelled_contours_image.png")
+        cv2.imwrite(final_output_dir, labelling_contours_img)
+
+        # Resize the centroids visualization image to match the contours visualization size, if necessary
+        if contours_visualization.size != centroids_visualization.size:
+            print(f"Resizing centroids visualization image from {centroids_visualization.size} to {contours_visualization.size}")
+            centroids_visualization = centroids_visualization.resize(contours_visualization.size)
+
+        # Change the non-zero pixels in the centroids visualization to red
+        centroids_visualization.putdata([(0, 0, 255, 255) if pixel[0] != 0 else pixel for pixel in centroids_visualization.getdata()])
+
+        # Combine the contours visualization and centroids visualization images side by side
+        contours_centroids_img = Image.blend(contours_visualization, centroids_visualization, alpha=0.4)
+        final_output_dir = os.path.join(output_dir, "contours_centroids_image.png")
+        contours_centroids_img.save(final_output_dir, format="PNG")
+
+        # Resize the Voronoi diagram image to match the centroids visualization size, if necessary
+        if centroids_visualization.size != voronoi_diagram.size:
+            print(f"Resizing Voronoi diagram image from {voronoi_diagram.size} to {centroids_visualization.size}")
+            voronoi_diagram = voronoi_diagram.resize(centroids_visualization.size)
+
+        # Blend the centroids visualization and Voronoi diagram images with alpha blending
+        voronoi_centroids_img = Image.blend(centroids_visualization, voronoi_diagram, alpha=0.2)
+        final_output_dir = os.path.join(output_dir, "voronoi_centroids_image.png")
+        voronoi_centroids_img.save(final_output_dir, format="PNG")
 
 def main():
 
