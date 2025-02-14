@@ -210,16 +210,17 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
             continue
 
         # Save the original image to the output directory
-        original_img_path = os.path.join(output_dir, "original_image.png")
-        cv2.imwrite(original_img_path, original_img)
-        print(f"Original image saved at {original_img_path}")
+        original_img_title = basename + "_original_image.png"
+        original_img_title = os.path.join(output_dir, original_img_title)
+        cv2.imwrite(original_img_title, original_img)
+        print(f"Original image saved at {original_img_title}")
 
         # Apply brightness adjustment to the image for better visualization
-        brightness_increase = 10  # Value for increasing brightness
+        brightness_increase = 30  # Value for increasing brightness
         original_bright_img = cv2.convertScaleAbs(original_img, alpha=2, beta=brightness_increase)
-        brightened_img_path = os.path.join(output_dir, "brightened_image.png")
-        cv2.imwrite(brightened_img_path, original_bright_img)  # Save the brightened image
-        print(f"Brightened image saved at {brightened_img_path}")
+        brightened_img_title = os.path.join(output_dir, basename + "_brightened_image.png")
+        cv2.imwrite(brightened_img_title, original_bright_img)  # Save the brightened image
+        print(f"Brightened image saved at {brightened_img_title}")
 
         # Visualize and display the labeled image using matplotlib
         fig, ax = plt.subplots(figsize=(8, 8))  # Create a figure and axis with specified size for visualization
@@ -228,10 +229,10 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
         ax.axis('off')  # Turn off axis display for cleaner visualization
 
         # Save the labeled image plot to the specified output directory
-        labeled_img_path = os.path.join(output_dir, "labelling_diagram.png")
-        plt.savefig(labeled_img_path, bbox_inches='tight')  # Save the plot as an image
+        labeled_img_title = os.path.join(output_dir, basename + "_labelling_diagram.png")
+        plt.savefig(labeled_img_title, bbox_inches='tight')  # Save the plot as an image
         plt.close(fig)  # Close the figure to free up memory
-        print(f"Labeled diagram saved at {labeled_img_path}")
+        print(f"Labeled diagram saved at {labeled_img_title}")
 
         # Process the labelling to extract centroids and contours of detected regions
         centroids, contours = process_labelling(labelling, nmin, nmax, original_img)
@@ -245,10 +246,8 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
             cv2.drawContours(contour_canvas, contour_list, -1, (255, 255, 255), thickness=4)
 
         # Define the path to save the contour visualization image
-        contours_img_path = os.path.join(output_dir, "contours_visualization.png")
-
-        # Save the contour visualization image to the specified path
-        cv2.imwrite(contours_img_path, contour_canvas)
+        contours_img_title = os.path.join(output_dir, basename + "_contours_visualization.png")
+        cv2.imwrite(contours_img_title, contour_canvas)
 
         # Convert the list of centroids into a NumPy array for easier processing
         centroids = np.array(centroids)
@@ -273,37 +272,33 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
                 # Print a message if the centroid is out of bounds for the canvas
                 print(f"Centroid ({x}, {y}) is out of bounds for the canvas dimensions: {centroids_canvas.shape}")
 
-        # Define the path to save the centroids visualization image
-        centroids_img_path = os.path.join(output_dir, "centroids_visualization.png")
-
-        # Save the centroids visualization image to the specified path
-        cv2.imwrite(centroids_img_path, centroids_canvas)
-
-        # Print confirmation message for the saved centroids visualization
-        print(f"Centroids visualization saved at {centroids_img_path}")
+        # Define the path and save the centroids visualization image
+        centroids_img_title = os.path.join(output_dir, basename + "_centroids_visualization.png")
+        cv2.imwrite(centroids_img_title, centroids_canvas)
+        print(f"Centroids visualization saved at {centroids_img_title}")
 
         # Create a Voronoi diagram using the computed centroids
         vor = Voronoi(centroids)
 
         # Generate the figure and axis for plotting the Voronoi diagram
         fig, ax = plt.subplots(figsize=(8, 8))
-        voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='orange', line_width=2)
+        voronoi_plot_2d(vor, ax=ax, show_vertices=True, line_colors='orange', line_width=2)
         ax.axis('off')
 
         # Define the output file path for saving the Voronoi diagram
-        final_output_dir = os.path.join(output_dir, "voronoi_diagram.png")
-        fig.savefig(final_output_dir, bbox_inches='tight', dpi=500)
+        voronoi_img_title = os.path.join(output_dir, basename + "_voronoi_diagram.png")
+        fig.savefig(voronoi_img_title, bbox_inches='tight', dpi=500)
         plt.close(fig)
 
         # Print the confirmation message indicating the saved Voronoi diagram
-        print(f"Voronoi diagram saved at {final_output_dir}")
+        print(f"Voronoi diagram saved at {voronoi_img_title}")
 
         # Open the brightened image, labelling diagram, contours visualization, centroids visualization, and Voronoi diagram for overlay
-        brightened_image_path = os.path.join(output_dir, "brightened_image.png")
-        labelling_visualization_path = os.path.join(output_dir, "labelling_diagram.png")
-        contours_visualization_path = os.path.join(output_dir, "contours_visualization.png")
-        centroids_visualization_path = os.path.join(output_dir, "centroids_visualization.png")
-        voronoi_diagram_path = os.path.join(output_dir, "voronoi_diagram.png")
+        brightened_image_path = os.path.join(output_dir, brightened_img_title)
+        labelling_visualization_path = os.path.join(output_dir, labeled_img_title)
+        contours_visualization_path = os.path.join(output_dir, contours_img_title)
+        centroids_visualization_path = os.path.join(output_dir, centroids_img_title)
+        voronoi_diagram_path = os.path.join(output_dir, voronoi_img_title)
 
         # Open the images as RGBA for overlaying
         original_image = Image.open(brightened_image_path).convert("RGBA")
@@ -319,7 +314,7 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
 
         # Combine the original bright image with the labeled image and save the result
         original_labelled_img = np.hstack((original_image, labelling_visualization))
-        final_output_dir = os.path.join(output_dir, "original_labelled_image.png")
+        final_output_dir = os.path.join(output_dir, basename + "_original_labelled_image.png")
         cv2.imwrite(final_output_dir, original_labelled_img)
 
         # Resize the contours visualization image to match the labelling visualization size, if necessary
@@ -329,7 +324,7 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
 
         # Combine the labelling visualization and contours visualization images side by side
         labelling_contours_img = np.hstack((labelling_visualization, contours_visualization))
-        final_output_dir = os.path.join(output_dir, "labelled_contours_image.png")
+        final_output_dir = os.path.join(output_dir, basename + "_labelled_contours_image.png")
         cv2.imwrite(final_output_dir, labelling_contours_img)
 
         # Resize the centroids visualization image to match the contours visualization size, if necessary
@@ -342,7 +337,7 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
 
         # Combine the contours visualization and centroids visualization images side by side
         contours_centroids_img = Image.blend(contours_visualization, centroids_visualization, alpha=0.4)
-        final_output_dir = os.path.join(output_dir, "contours_centroids_image.png")
+        final_output_dir = os.path.join(output_dir, basename + "_contours_centroids_image.png")
         contours_centroids_img.save(final_output_dir, format="PNG")
 
         # Resize the Voronoi diagram image to match the centroids visualization size, if necessary
@@ -352,8 +347,18 @@ def voronoi(tif_paths, classification, nmin, nmax, dapi_channel_idx, downsample_
 
         # Blend the centroids visualization and Voronoi diagram images with alpha blending
         voronoi_centroids_img = Image.blend(centroids_visualization, voronoi_diagram, alpha=0.2)
-        final_output_dir = os.path.join(output_dir, "voronoi_centroids_image.png")
+        final_output_dir = os.path.join(output_dir, basename + "_voronoi_centroids_image.png")
         voronoi_centroids_img.save(final_output_dir, format="PNG")
+
+        # Resize the Voronoi diagram image to match the original bright image size, if necessary
+        if original_image.size != voronoi_diagram.size:
+            print(f"Resizing Voronoi diagram image from {voronoi_diagram.size} to {original_image.size}")
+            voronoi_diagram = voronoi_diagram.resize(original_image.size)
+
+        # Blend the original bright image and Voronoi diagram with alpha bending
+        original_voronoi_img = Image.blend(original_image, voronoi_diagram, alpha=0.3)
+        final_output_dir = os.path.join(output_dir, basename + "_original_voronoi_image.png")
+        original_voronoi_img.save(final_output_dir, format="PNG")
 
 def main():
 
@@ -452,3 +457,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Changes:
+  # Changed nuclei input and output params
+  # Changed params in predict_instances function
+  # Changed solidity parameter from 0.8 to 0.6
+# Links:
+   # https://squidpy.readthedocs.io/en/stable/notebooks/tutorials/tutorial_stardist.html
