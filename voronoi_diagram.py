@@ -367,7 +367,7 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
         # Extract patches from the Voronoi diagram and save them in the specified directory
         extract_patches(original_voronoi_array, patch_dir, classification, basename)
 
-def extract_patches(image, patch_dir, classification, basename, patch_size=512, stride=512, save_size=512):
+def extract_patches(image, patch_dir, classification, basename, patch_size=256, stride=256, save_size=512):
 
     # Determine the output directory based on the environment (Docker or local)
     if os.path.exists('/.dockerenv'):
