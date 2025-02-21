@@ -544,7 +544,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.7, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=40, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=1, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Main function for training the model.
@@ -787,35 +787,35 @@ def main():
 
     # Split the image patches into training, validation, and testing datasets according to specified ratios
     train_loader, val_loader, test_loader = splitting_data(image_patches, total_image_count)
-    #
-    # # Load the model architecture or pre-trained model.
-    # device, model = load_model()
-    #
-    # # Retrieve the hook function for 'avg_pool' layer to capture activations
-    # hook_function = get_activation('avg_pool', activation)
-    #
-    # # Register the hook to store activations from the specified layer during the forward pass
-    # model.features[8].register_forward_hook(hook_function)
-    #
-    # # Call the get_params function to obtain the loss function (criterion), optimizer, and learning rate scheduler for the model.
-    # criterion, optimizer, scheduler = get_params(model)
-    #
-    # # Train the model and retrieve the embeddings, training losses, and training accuracies
-    # all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc = train(model, device, train_loader, val_loader, criterion, optimizer, scheduler)
-    #
-    # # Run the testing phase of the model on the test dataset
-    # test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc = testing(model, device, test_loader, criterion)
-    #
-    # # Print the confusion matrix for the testing phase
-    # print("Testing Confusion Matrix:\n", test_confusion_matrix)
-    #
-    # # Print the normalized confusion matrix to evaluate per-class accuracy
-    # # Normalization is done by dividing the diagonal by the sum of each row
-    # print("Testing Normalized Confusion Matrix (per-class accuracy):\n",
-    #       test_confusion_matrix.diag() / test_confusion_matrix.sum(1))
-    #
-    # # Print the average testing loss and accuracy metrics
-    # print(f'Average Testing Loss: {all_test_loss:.4f}, Average Testing Accuracy: {all_test_acc:.4f}')
+
+    # Load the model architecture or pre-trained model.
+    device, model = load_model()
+
+    # Retrieve the hook function for 'avg_pool' layer to capture activations
+    hook_function = get_activation('avg_pool', activation)
+
+    # Register the hook to store activations from the specified layer during the forward pass
+    model.features[8].register_forward_hook(hook_function)
+
+    # Call the get_params function to obtain the loss function (criterion), optimizer, and learning rate scheduler for the model.
+    criterion, optimizer, scheduler = get_params(model)
+
+    # Train the model and retrieve the embeddings, training losses, and training accuracies
+    all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc = train(model, device, train_loader, val_loader, criterion, optimizer, scheduler)
+
+    # Run the testing phase of the model on the test dataset
+    test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc = testing(model, device, test_loader, criterion)
+    
+    # Print the confusion matrix for the testing phase
+    print("Testing Confusion Matrix:\n", test_confusion_matrix)
+
+    # Print the normalized confusion matrix to evaluate per-class accuracy
+    # Normalization is done by dividing the diagonal by the sum of each row
+    print("Testing Normalized Confusion Matrix (per-class accuracy):\n",
+          test_confusion_matrix.diag() / test_confusion_matrix.sum(1))
+
+    # Print the average testing loss and accuracy metrics
+    print(f'Average Testing Loss: {all_test_loss:.4f}, Average Testing Accuracy: {all_test_acc:.4f}')
 
 # Entry point for the script
 if __name__ == "__main__":
