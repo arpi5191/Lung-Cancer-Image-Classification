@@ -278,12 +278,15 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
         cv2.imwrite(centroids_img_title, centroids_canvas)
         print(f"Centroids visualization saved at {centroids_img_title}")
 
-        # Create a Voronoi diagram using the computed centroids
+        # Now, generate Voronoi using adjusted_centroids
         vor = Voronoi(centroids)
 
         # Generate the figure and axis for plotting the Voronoi diagram
         fig, ax = plt.subplots(figsize=(8, 8))
-        voronoi_plot_2d(vor, ax=ax, show_vertices=True, line_colors='orange', line_width=2)
+        voronoi_plot_2d(vor, ax=ax, show_points=False, show_vertices=False, line_colors="orange", line_width=2)
+
+        # Plot centroids as red dots
+        ax.scatter(centroids[:, 0], centroids[:, 1], color='red', s=30, marker="o", label="Your Computed Centroids")
         ax.axis('off')
 
         # Define the output file path for saving the Voronoi diagram
@@ -328,13 +331,23 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
         final_output_dir = os.path.join(output_dir, basename + "_labelled_contours_image.png")
         cv2.imwrite(final_output_dir, labelling_contours_img)
 
+        # Overlay centroids_visualization on original_image
+        if original_image.size != centroids_visualization.size:
+            print(f"Resizing centroids visualization image from {centroids_visualization.size} to {original_image.size}")
+            centroids_visualization = centroids_visualization.resize(original_image.size)
+
+        # Change the non-zero pixels in the centroids visualization to red
+        centroids_visualization.putdata([(0, 0, 255, 255) if pixel[0] != 0 else pixel for pixel in centroids_visualization.getdata()])
+
+        # Combine the contours visualization and centroids visualization images side by side
+        original_centroids_img = Image.blend(original_image, centroids_visualization, alpha=0.4)
+        final_output_dir = os.path.join(output_dir, basename + "_original_centroids_image.png")
+        original_centroids_img.save(final_output_dir, format="PNG")
+
         # Resize the centroids visualization image to match the contours visualization size, if necessary
         if contours_visualization.size != centroids_visualization.size:
             print(f"Resizing centroids visualization image from {centroids_visualization.size} to {contours_visualization.size}")
             centroids_visualization = centroids_visualization.resize(contours_visualization.size)
-
-        # Change the non-zero pixels in the centroids visualization to red
-        centroids_visualization.putdata([(0, 0, 255, 255) if pixel[0] != 0 else pixel for pixel in centroids_visualization.getdata()])
 
         # Combine the contours visualization and centroids visualization images side by side
         contours_centroids_img = Image.blend(contours_visualization, centroids_visualization, alpha=0.4)
