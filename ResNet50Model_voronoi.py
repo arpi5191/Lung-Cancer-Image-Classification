@@ -544,7 +544,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.7, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=1, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=40, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Main function for training the model.
@@ -805,7 +805,7 @@ def main():
 
     # Run the testing phase of the model on the test dataset
     test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc = testing(model, device, test_loader, criterion)
-    
+
     # Print the confusion matrix for the testing phase
     print("Testing Confusion Matrix:\n", test_confusion_matrix)
 
