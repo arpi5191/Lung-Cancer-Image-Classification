@@ -219,9 +219,9 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
         # Apply brightness adjustment to the image for better visualization
         brightness_increase = 30  # Value for increasing brightness
         original_bright_img = cv2.convertScaleAbs(original_img, alpha=2, beta=brightness_increase)
-        brightened_img_title = os.path.join(output_dir, basename + "_brightened_image.png")
-        cv2.imwrite(brightened_img_title, original_bright_img)  # Save the brightened image
-        print(f"Brightened image saved at {brightened_img_title}")
+        brightened_image_path = os.path.join(output_dir, basename + "_brightened_image.png")
+        cv2.imwrite(brightened_image_path, original_bright_img)  # Save the brightened image
+        print(f"Brightened image saved at {brightened_image_path}")
 
         # Visualize and display the labeled image using matplotlib
         fig, ax = plt.subplots(figsize=(8, 8))  # Create a figure and axis with specified size for visualization
@@ -230,10 +230,10 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
         ax.axis('off')  # Turn off axis display for cleaner visualization
 
         # Save the labeled image plot to the specified output directory
-        labeled_img_title = os.path.join(output_dir, basename + "_labelling_diagram.png")
-        plt.savefig(labeled_img_title, bbox_inches='tight')  # Save the plot as an image
+        labelling_visualization_path = os.path.join(output_dir, basename + "_labelling_diagram.png")
+        plt.savefig(labelling_visualization_path, bbox_inches='tight')  # Save the plot as an image
         plt.close(fig)  # Close the figure to free up memory
-        print(f"Labeled diagram saved at {labeled_img_title}")
+        print(f"Labeled diagram saved at {labelling_visualization_path}")
 
         # Process the labelling to extract centroids and contours of detected regions
         centroids, contours = process_labelling(labelling, nmin, nmax, original_img)
@@ -247,62 +247,51 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
             cv2.drawContours(contour_canvas, contour_list, -1, (255, 255, 255), thickness=4)
 
         # Define the path to save the contour visualization image
-        contours_img_title = os.path.join(output_dir, basename + "_contours_visualization.png")
-        cv2.imwrite(contours_img_title, contour_canvas)
+        contours_visualization_path = os.path.join(output_dir, basename + "_contours_visualization.png")
+        cv2.imwrite(contours_visualization_path, contour_canvas)
 
         # Convert the list of centroids into a NumPy array for easier processing
-        centroids = np.array(centroids)
+        centroids_array = np.array(centroids)
 
         # Create a blank canvas with the same dimensions as the labelling array for visualizing centroids
         centroids_canvas = np.zeros_like(labelling, dtype=np.uint8)
 
         # Loop through each centroid to draw it on the canvas
-        for centroid in centroids:
+        for centroid in centroids_array:
             # Convert centroid coordinates to integer values
             x, y = map(int, centroid)
-
-            # Debugging: Print the coordinates of each centroid
-            print(f"Centroid coordinates: ({x}, {y})")
 
             # Check if the centroid is within the bounds of the canvas
             # Ensure that both x and y are within the image dimensions (width, height)
             if 0 <= x < centroids_canvas.shape[1] and 0 <= y < centroids_canvas.shape[0]:
                 # Draw a red filled circle at the centroid location (with color set to white in this case)
+                # The color (255, 255, 255) is white, and thickness=-1 means filled circle
                 cv2.circle(centroids_canvas, (x, y), radius=5, color=(255, 255, 255), thickness=-1)
-            else:
-                # Print a message if the centroid is out of bounds for the canvas
-                print(f"Centroid ({x}, {y}) is out of bounds for the canvas dimensions: {centroids_canvas.shape}")
 
         # Define the path and save the centroids visualization image
-        centroids_img_title = os.path.join(output_dir, basename + "_centroids_visualization.png")
-        cv2.imwrite(centroids_img_title, centroids_canvas)
-        print(f"Centroids visualization saved at {centroids_img_title}")
+        centroids_visualization_path = os.path.join(output_dir, basename + "_centroids_visualization.png")
+        cv2.imwrite(centroids_visualization_path, centroids_canvas)  # Save the canvas as an image file
+        print(f"Centroids visualization saved at {centroids_visualization_path}")  # Output the path of the saved image
 
-        # Now, generate Voronoi using adjusted_centroids
-        vor = Voronoi(centroids)
-
-        # Generate the figure and axis for plotting the Voronoi diagram
+        # When generating the Voronoi diagram, set the axis limits to match your image dimensions
         fig, ax = plt.subplots(figsize=(8, 8))
-        voronoi_plot_2d(vor, ax=ax, show_points=False, show_vertices=False, line_colors="orange", line_width=2)
+        vor = Voronoi(centroids_array)
+        voronoi_plot_2d(vor, ax=ax, show_points=True, show_vertices=True, line_colors="orange", line_width=2)
+        ax.scatter(centroids_array[:, 0], centroids_array[:, 1], color='red', s=30, marker="o")
 
-        # Plot centroids as red dots
-        ax.scatter(centroids[:, 0], centroids[:, 1], color='red', s=30, marker="o", label="Your Computed Centroids")
+        # Set the limits to match your image dimensions
+        img_height, img_width = labelling.shape
+        ax.set_xlim(0, img_width)
+        ax.set_ylim(img_height, 0)  # Note: y-axis is flipped in images vs. plots
         ax.axis('off')
 
         # Define the output file path for saving the Voronoi diagram
-        voronoi_img_title = os.path.join(output_dir, basename + "_voronoi_diagram.png")
-        fig.savefig(voronoi_img_title, bbox_inches='tight', dpi=500)
+        voronoi_diagram_path = os.path.join(output_dir, basename + "_voronoi_diagram.png")
+        fig.savefig(voronoi_diagram_path, bbox_inches='tight', dpi=500)
         plt.close(fig)
 
         # Print the confirmation message indicating the saved Voronoi diagram
-        print(f"Voronoi diagram saved at {voronoi_img_title}")
-
-        # Open the brightened image, labelling diagram, contours visualization, centroids visualization, and Voronoi diagram for overlay
-        brightened_image_path = os.path.join(output_dir, brightened_img_title)
-        labelling_visualization_path = os.path.join(output_dir, labeled_img_title)
-        contours_visualization_path = os.path.join(output_dir, contours_img_title)
-        centroids_visualization_path = os.path.join(output_dir, centroids_img_title)
-        voronoi_diagram_path = os.path.join(output_dir, voronoi_img_title)
+        print(f"Voronoi diagram saved at {voronoi_diagram_path}")
 
         # Open the images as RGBA for overlaying
         original_image = Image.open(brightened_image_path).convert("RGBA")
@@ -379,6 +368,8 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
 
         # Extract patches from the Voronoi diagram and save them in the specified directory
         extract_patches(original_voronoi_array, patch_dir, classification, basename)
+
+        exit()
 
 def extract_patches(image, patch_dir, classification, basename, patch_size=256, stride=256, save_size=512):
 
