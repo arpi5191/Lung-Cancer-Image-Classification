@@ -17,6 +17,8 @@ import argparse
 import numpy as np
 import pandas as pd
 from PIL import Image
+import skimage.measure
+from scipy import ndimage
 from scipy.ndimage import zoom
 import matplotlib.pyplot as plt
 from skimage import img_as_ubyte
@@ -26,8 +28,10 @@ from skimage.color import label2rgb
 from csbdeep.utils import normalize
 from shapely.geometry import Polygon
 from skimage.transform import resize
-from stardist.models import StarDist2D
 from scipy.stats import skew, kurtosis
+from stardist.models import StarDist2D
+from skimage.feature import peak_local_max
+from skimage.segmentation import watershed
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GridSearchCV
 from scipy.spatial import Voronoi, voronoi_plot_2d
@@ -188,23 +192,74 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
 
         # Load and downsample the DAPI channel image for nuclei detection
         original_img = load_channel(tif_path, dapi_channel_idx)
-        print(f"Number of dimensions: {original_img.ndim if isinstance(original_img, np.ndarray) else 'Not a NumPy array'}")
         original_img = original_img[::downsample_interval, ::downsample_interval]
 
-        # Apply Gaussian blur to reduce noise while preserving structures
-        original_img = cv2.GaussianBlur(original_img, (5, 5), 0)
+        # Preprocessing: Contrast Limited Adaptive Histogram Equalization (CLAHE)
+        # Credit to ClaudeAI
 
-        # Apply median filter to further remove noise and smooth the image
-        original_img = median(original_img, disk(3)).astype(np.uint8)
+        # Create a CLAHE (Contrast Limited Adaptive Histogram Equalization) object
+        # clipLimit: Controls the contrast limit, higher values allow more contrast enhancement
+        # tileGridSize: The size of the grid for adaptive histogram equalization (larger tiles mean smoother results)
+        # Credit to Claude AI: Showing me the CLAHE method
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
-        # Perform instance segmentation using the pre-trained StarDist model
-        labelling, _ = model.predict_instances(normalize(original_img))
+        # Normalize the image to uint8 format if it's not already in that format
+        # This step scales the pixel values between 0 and 255 if the image is not already of type np.uint8
+        if original_img.dtype != np.uint8:
+            original_img = ((original_img - original_img.min()) / (original_img.max() - original_img.min()) * 255).astype(np.uint8)
 
-        # Scale up the labelling array back to the original size
+        # Apply CLAHE to enhance the local contrast of the image
+        original_img = clahe.apply(original_img)
+
+        # Preprocessing: Gaussian Blurring
+
+        # Apply Gaussian Blur to reduce noise and smooth the image
+        # (7, 7) is the size of the kernel, and 0 indicates the standard deviation in both x and y directions
+        original_img = cv2.GaussianBlur(original_img, (3, 3), 0)
+
+        # Preprocessing: Morphological Closing
+        # Credit to ClaudeAI
+
+        # Create a kernel for morphological transformations (a 3x3 matrix of ones)
+        # Apply morphological closing to fill small holes in the image (helps in noise reduction)
+        # This operation is useful in cleaning up small gaps or holes in the objects
+        kernel = np.ones((7, 7), np.uint8)
+        original_img = cv2.morphologyEx(original_img, cv2.MORPH_CLOSE, kernel)
+
+        # Perform instance segmentation using the pre-trained StarDist model, scale labelling array
+        # to original size, and filter nuclei based on size constraints
+        labelling, _ = model.predict_instances(normalize(original_img), prob_thresh=0.5, nms_thresh=0.3)
         labelling = zoom(labelling, downsample_interval, order=0)
-
-        # Filter nuclei based on size constraints
         labelling = filter_on_nuclei_size(labelling, nmin, nmax)
+
+        # Merge small adjacent regions using morphological operations
+        kernel = np.ones((5, 5), np.uint8)
+        labelling_processed = cv2.morphologyEx(labelling.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+
+        # Convert back to labeled regions while preserving unique labels
+        labelling = skimage.measure.label(labelling_processed)
+
+        # Preprocessing: Watershed Segmentation
+        # Credit to ClaudeAI
+
+        # Compute the Euclidean distance transform to highlight nuclei separation
+        distance = ndimage.distance_transform_edt(labelling > 0)
+
+        # Identify local maxima in the distance map to use as markers for watershed
+        local_max_coords = peak_local_max(distance, min_distance=30, labels=labelling > 0)
+
+        # Create a mask where local maxima will be marked
+        local_max_mask = np.zeros(distance.shape, dtype=bool)
+        local_max_mask[tuple(local_max_coords.T)] = True
+
+        # Label the local maxima to serve as markers for the watershed algorithm
+        markers = ndimage.label(local_max_mask)[0]
+
+        # Apply the watershed algorithm to refine the segmentation of touching nuclei
+        refined_labels = watershed(-distance, markers, mask=labelling > 0)
+
+        # Update the original labelling with the refined segmentation
+        labelling = refined_labels
 
         # Skip further processing if no valid nuclei are detected
         if sum(sum(labelling)) == 0:
@@ -368,8 +423,6 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
 
         # Extract patches from the Voronoi diagram and save them in the specified directory
         extract_patches(original_voronoi_array, patch_dir, classification, basename)
-
-        exit()
 
 def extract_patches(image, patch_dir, classification, basename, patch_size=256, stride=256, save_size=512):
 
@@ -552,9 +605,5 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Changes:
-  # Changed nuclei input and output params
-  # Changed params in predict_instances function
-  # Changed solidity parameter from 0.8 to 0.6
 # Links:
    # https://squidpy.readthedocs.io/en/stable/notebooks/tutorials/tutorial_stardist.html
