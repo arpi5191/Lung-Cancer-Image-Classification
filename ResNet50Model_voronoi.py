@@ -354,7 +354,7 @@ def sampler(dataset, count, size=1000):
     # Return the weighted sampler
     return weighted_sampler
 
-def splitting_data(image_patches, total_image_count, train_ratio=0.68, val_ratio=0.16, test_ratio=0.16, batch_size=32):
+def splitting_data(image_patches, total_image_count, train_ratio=0.68, val_ratio=0.16, test_ratio=0.16, batch_size=64):
 
     # Create directories for training, validation, and testing data
     data_dir, train_dir, val_dir, test_dir = create_data_directories()
@@ -526,7 +526,7 @@ def get_activation(name, activation):
     # The `hook` function itself is returned by `get_activation`, so it can be registered.
     return hook
 
-def get_params(model, learningRate=1e-4, weight_decay=1e-5, momentum=0.7, factor=0.5, patience=3):
+def get_params(model, learningRate=5e-5, weight_decay=1e-6, momentum=0.9, factor=0.5, patience=2):
 
     # Define the loss function as CrossEntropyLoss, commonly used for multi-class classification tasks.
     criterion = nn.CrossEntropyLoss()
