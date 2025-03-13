@@ -526,7 +526,7 @@ def get_activation(name, activation):
     # The `hook` function itself is returned by `get_activation`, so it can be registered.
     return hook
 
-def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.7, factor=0.5, patience=3):
+def get_params(model, learningRate=1e-4, weight_decay=1e-5, momentum=0.7, factor=0.5, patience=3):
 
     # Define the loss function as CrossEntropyLoss, commonly used for multi-class classification tasks.
     criterion = nn.CrossEntropyLoss()
@@ -544,7 +544,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.7, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=40, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=20, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Main function for training the model.
