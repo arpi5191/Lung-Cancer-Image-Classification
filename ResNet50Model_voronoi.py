@@ -354,7 +354,7 @@ def sampler(dataset, count, size=1000):
     # Return the weighted sampler
     return weighted_sampler
 
-def splitting_data(image_patches, total_image_count, train_ratio=0.68, val_ratio=0.16, test_ratio=0.16, batch_size=64):
+def splitting_data(image_patches, total_image_count, train_ratio=0.68, val_ratio=0.16, test_ratio=0.16, batch_size=32):
 
     # Create directories for training, validation, and testing data
     data_dir, train_dir, val_dir, test_dir = create_data_directories()
@@ -474,41 +474,47 @@ class ModelEmbedding(nn.Module):
         return embedding_out, out
 
 def load_model():
-
     # Load the ResNet34 architecture pre-trained model
-    model = models.resnet34()
+    # pretrained=True loads the model with pre-trained weights on ImageNet
+    model = models.resnet34(pretrained=True)
 
     # Replace the first convolutional layer (conv1) of the model
     # in_channels=1: The number of input channels is set to 1 (for grayscale images)
     # out_channels=64: The number of output feature maps produced by this convolution layer
-    # kernel_size=3: The size of the kernel (filter) used in this convolution operation is 3x3
+    # kernel_size=7: The size of the kernel (filter) used in this convolution operation is 7x7
     # stride=2: The stride (step size) the filter takes when moving across the input
     # padding=3: Zero-padding added around the input to preserve spatial dimensions
-    # bias=False: No bias term is added in the convolution operation
+    # bias=False: No bias term is added in the convolution operation to reduce computational cost
     model.conv1 = nn.Conv2d(in_channels=1,
                             out_channels=64,
-                            kernel_size=3,
+                            kernel_size=7,  # Kernel size is 7x7 for initial convolution
                             stride=2,
-                            padding=3,
+                            padding=3,  # Padding ensures the spatial size is preserved after convolution
                             bias=False)
 
-    # # Change the average pooling layer to adaptive pooling
-    # model.avgpool = nn.AvgPool2d(kernel_size=1, stride=1)
-    #
-    # # Modify the final fully connected layer
-    # model.fc = nn.Linear(model.fc.in_features, num_classes)
+    # Change the average pooling layer to adaptive pooling
+    # nn.AdaptiveAvgPool2d(kernel_size=1) ensures the output is a fixed size (1x1)
+    # regardless of the input size, useful for varying input sizes
+    model.avgpool = nn.AdaptiveAvgPool2d(output_size=(1, 1))  # Output size is fixed to 1x1
+
+    # Modify the final fully connected layer to match the number of classes
+    # model.fc.in_features gives the input size to the fully connected layer
+    # num_classes is the number of output classes (should be defined earlier in the code)
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
 
     # Wrap the modified model using the custom ModelEmbedding class
-    # to remove the last layer and add layers for embedding extraction
+    # ModelEmbedding removes the final classification layer (model.fc)
+    # and adds layers for embedding extraction (useful for transfer learning)
     model = ModelEmbedding(model)
 
     # Set the device to GPU if available, otherwise use CPU
+    # This ensures the model runs on the available hardware (GPU if possible, else CPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Move the model to the device (GPU or CPU) for training/inference
     model.to(device)  # Transfer the model to the specified device (GPU or CPU)
 
-    return device, model  # Return the modified model for further use
+    return device, model  # Return the modified model and device for further use
 
 def get_activation(name, activation):
     # The hook function takes three arguments:
@@ -531,9 +537,9 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-6, momentum=0.7, factor
     # Define the loss function as CrossEntropyLoss, commonly used for multi-class classification tasks.
     criterion = nn.CrossEntropyLoss()
 
-    # Initialize the Adam optimizer for the model's parameters with the specified learning rate.
+    # Initialize the AdamW optimizer for the model's parameters with the specified learning rate.
     # The 'momentum' argument is not applicable for Adam but is included for consistency with other optimizers.
-    optimizer = torch.optim.Adam(model.parameters(), lr=learningRate, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learningRate, weight_decay=weight_decay)
 
     # Set up a learning rate scheduler that reduces the learning rate when a plateau in validation loss is detected.
     # The 'factor' specifies how much to reduce the learning rate.
@@ -544,7 +550,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-6, momentum=0.7, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=40, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=30, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Main function for training the model.
