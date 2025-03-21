@@ -1,3 +1,5 @@
+# To convert images to grayscale: https://www.resizepixel.com/download
+
 # Import packages
 import os
 import copy
@@ -820,3 +822,7 @@ def main():
 # Entry point for the script
 if __name__ == "__main__":
     main()
+
+# Doubts
+  # 1) What size to do images because the layer size of resnet34 is 512? Images are blurry with size 512.
+  # 2) If I have to look for more data what is recommended: Kaggle, NBIA Data Retriever, Pittsburgh Supercomputer?
