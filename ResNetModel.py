@@ -757,7 +757,7 @@ def get_activation(name, activation):
 
     return hook
 
-def get_params(model, learningRate=1e-5, weight_decay=1e-5, momentum=0.7, factor=0.5, patience=3):
+def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.9, factor=0.5, patience=3):
     """
     Initializes and returns the loss function, optimizer, and learning rate scheduler for training a model.
 
@@ -785,6 +785,7 @@ def get_params(model, learningRate=1e-5, weight_decay=1e-5, momentum=0.7, factor
 
     # Initialize the AdamW optimizer for the model's parameters with the specified learning rate.
     # The 'momentum' argument is not applicable for AdamW but is included for consistency with other optimizers.
+    # optimizer = torch.optim.Adam(model.parameters(), lr=learningRate, weight_decay=weight_decay)
     optimizer = torch.optim.Adam(model.parameters(), lr=learningRate, weight_decay=weight_decay)
 
     # Set up a learning rate scheduler that reduces the learning rate when a plateau in validation loss is detected.
