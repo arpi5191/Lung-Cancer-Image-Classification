@@ -123,7 +123,7 @@ def main():
     """
     Main function to run simulations for both original and Voronoi-based models.
     """
-    simulations_num = 2 # Define the number of simulations to run
+    simulations_num = 5 # Define the number of simulations to run
 
     # Run simulations for the original model
     original_train_accs, original_val_accs, original_test_accs = run_simulations(simulations_num, original_model)
@@ -143,3 +143,5 @@ def main():
 # Ensure that the main function is called when the script is executed directly
 if __name__ == "__main__":
     main()
+
+# https://medium.com/@ebimsv/ml-series-day-42-statistical-tests-for-model-comparison-4f5cf63da74a
