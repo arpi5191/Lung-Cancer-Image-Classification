@@ -1,6 +1,8 @@
 # Import packages
 import numpy as np
 from scipy import stats
+from scipy.stats import shapiro
+from scipy.stats import wilcoxon
 import ResNetModel as original_model
 import ResNetModel_voronoi as voronoi_model
 
@@ -93,6 +95,97 @@ def summarize_model(name, train, val, test):
     # Calculate and print the mean and standard deviation of test accuracy
     print(f"Test Acc:  Mean = {np.mean(test):.4f}, Std = {np.std(test):.4f}")
 
+# Credit to chatGPT: Statistical Tests
+
+def check_normality_differences(original_accs, voronoi_accs, metric_name="Test"):
+    """
+    Check whether the differences in accuracies between two models follow a normal distribution.
+
+    This function uses the Shapiro-Wilk test to assess whether the distribution of paired differences
+    (original - voronoi) is approximately normal. This helps determine whether a parametric test
+    (like a paired t-test) or a non-parametric test (like the Wilcoxon signed-rank test) is appropriate.
+
+    Parameters
+    ----------
+    original_accs : list or array-like
+        Accuracy values from the original model.
+
+    voronoi_accs : list or array-like
+        Accuracy values from the Voronoi-based model.
+
+    metric_name : str, optional (default="Test")
+        A descriptive label for the accuracy metric being tested (e.g., "Test", "Validation", "Train").
+
+    Returns
+    -------
+    test : str
+        The recommended statistical test based on the normality of the differences.
+        Returns "Paired T-Test" if differences are normally distributed, otherwise "Wilcoxon".
+    """
+    # Compute the difference between corresponding accuracy values
+    differences = np.array(original_accs) - np.array(voronoi_accs)
+
+    # Conduct the Shapiro-Wilk test for normality on the differences
+    stat, p = shapiro(differences)
+
+    # Display the test statistic and p-value
+    print(f"\n{metric_name} Accuracy Shapiro-Wilk Test for Normality of Differences:")
+    print(f"statistic: {stat:.4f}, p-value: {p:.4f}")
+
+    # Interpret the p-value to suggest the appropriate statistical test
+    if p < 0.05:
+        # p < 0.05 indicates the data is not normally distributed
+        test = "Wilcoxon"
+        print("Note: Differences are NOT normally distributed (p < 0.05) — consider using Wilcoxon.")
+    else:
+        # p ≥ 0.05 indicates the data is likely normally distributed
+        test = "Paired T-Test"
+        print("Note: Differences appear normally distributed (p ≥ 0.05) — paired t-test is appropriate.")
+
+    # Return the name of the recommended statistical test for further use
+    return test
+
+def perform_wilcoxon_test(original_accs, voronoi_accs, metric_name="Test"):
+    """
+    Perform the Wilcoxon signed-rank test to compare paired accuracy values
+    from two models when the normality assumption is violated.
+
+    This non-parametric test is an alternative to the paired t-test and is used
+    when the differences between paired samples are not normally distributed.
+
+    Parameters
+    ----------
+    original_accs : list or array-like
+        Accuracy values from the original model.
+
+    voronoi_accs : list or array-like
+        Accuracy values from the Voronoi-based model.
+
+    metric_name : str, optional (default="Test")
+        Descriptive name of the accuracy metric being compared.
+
+    Returns
+    -------
+    None
+        Prints the test statistic, p-value, and interpretation of the result.
+    """
+    # Convert inputs to NumPy arrays for vectorized operations
+    original_accs = np.array(original_accs)
+    voronoi_accs = np.array(voronoi_accs)
+
+    # Perform the Wilcoxon signed-rank test on paired samples
+    stat, p = wilcoxon(original_accs, voronoi_accs)
+
+    # Print the results of the test
+    print(f"\n{metric_name} Accuracy Wilcoxon Signed-Rank Test:")
+    print(f"statistic: {stat:.4f}, p-value: {p:.4f}")
+
+    # Interpret the p-value
+    if p < 0.05:
+        print("Result: Statistically significant difference (p < 0.05).")
+    else:
+        print("Result: No statistically significant difference (p ≥ 0.05).")
+
 def perform_paired_ttest(original_accs, voronoi_accs, metric_name="Test"):
     """
     Perform a paired t-test between two sets of accuracies and interpret the result.
@@ -123,7 +216,7 @@ def main():
     """
     Main function to run simulations for both original and Voronoi-based models.
     """
-    simulations_num = 5 # Define the number of simulations to run
+    simulations_num = 20 # Define the number of simulations to run
 
     # Run simulations for the original model
     original_train_accs, original_val_accs, original_test_accs = run_simulations(simulations_num, original_model)
@@ -137,8 +230,17 @@ def main():
     # Call the function for the "Voronoi" model, passing in its training, validation, and test accuracies
     summarize_model("Voronoi", voronoi_train_accs, voronoi_val_accs, voronoi_test_accs)
 
-    # Perform a paired t-test to compare the training accuracies between the original and Voronoi models
-    perform_paired_ttest(original_test_accs, voronoi_test_accs, metric_name="Test")
+    # Determine the appropriate statistical test based on normality of accuracy differences
+    # This function returns either "Wilcoxon" or "Paired T-Test" depending on the Shapiro-Wilk test result
+    test = check_normality_differences(original_test_accs, voronoi_test_accs)
+
+    # Conditionally perform the suitable statistical test
+    if test == "Wilcoxon":
+        # If the differences are not normally distributed, use the Wilcoxon signed-rank test (non-parametric)
+        perform_wilcoxon_test(original_test_accs, voronoi_test_accs)
+    else:
+        # If the differences are normally distributed, use the paired t-test (parametric)
+        perform_paired_ttest(original_test_accs, voronoi_test_accs)
 
 # Ensure that the main function is called when the script is executed directly
 if __name__ == "__main__":
