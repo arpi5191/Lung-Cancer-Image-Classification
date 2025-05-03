@@ -687,7 +687,7 @@ def load_model():
 
     """
 
-    # Load the ResNet34 architecture pre-trained model
+    # Load the ResNet18 architecture pre-trained model
     model = models.resnet18(pretrained=True)
 
     # Replace the first convolutional layer (conv1) of the model
@@ -797,7 +797,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.9, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=1, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=10, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Main function for training the model.

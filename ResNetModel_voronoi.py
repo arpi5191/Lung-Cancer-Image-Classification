@@ -481,7 +481,7 @@ def sampler(dataset, count, size=1000):
     # Return the weighted sampler
     return weighted_sampler
 
-def splitting_data(image_patches, total_image_count, train_ratio=0.68, val_ratio=0.16, test_ratio=0.16, batch_size=32):
+def splitting_data(image_patches, total_image_count, train_ratio=0.60, val_ratio=0.20, test_ratio=0.20, batch_size=32):
     """
     Splits the provided image patches into training, validation, and testing datasets,
     and returns DataLoader objects for each dataset.
@@ -688,7 +688,7 @@ def load_model():
 
     # Load the ResNet34 architecture pre-trained model
     # pretrained=True loads the model with pre-trained weights on ImageNet
-    model = models.resnet34(pretrained=True)
+    model = models.resnet18(pretrained=True)
 
     # Replace the first convolutional layer (conv1) of the model
     # in_channels=1: The number of input channels is set to 1 (for grayscale images)
@@ -766,7 +766,8 @@ def get_activation(name, activation):
     # The `hook` function itself is returned by `get_activation`, so it can be registered.
     return hook
 
-def get_params(model, learningRate=1e-4, weight_decay=1e-6, momentum=0.7, factor=0.5, patience=3):
+# originally 1e-5
+def get_params(model, learningRate=1e-4, weight_decay=1e-6, momentum=0.7, factor=0.3, patience=3):
     """
     Initializes and returns the loss function, optimizer, and learning rate scheduler for training a model.
 
@@ -802,7 +803,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-6, momentum=0.7, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=1, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=30, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Main function for training the model.
