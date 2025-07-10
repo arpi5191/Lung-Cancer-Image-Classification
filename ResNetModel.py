@@ -1,5 +1,3 @@
-# To convert images to grayscale: https://www.resizepixel.com/download
-
 # Import packages
 import os
 import copy
@@ -7,6 +5,7 @@ import torch
 import random
 import shutil
 import tifffile
+import argparse
 import torchvision
 import numpy as np
 import pandas as pd
@@ -72,33 +71,34 @@ def get_patch_files(patches_dir, image_patches, total_image_count):
         - Prints debug messages about the directory structure and processing status.
     """
 
-    # Iterate through the subdirectories within the specified patches directory
+    # Iterate through each item in the specified patches directory
     for dir_name in os.listdir(patches_dir):
 
-        # Display the name of the current directory being processed
+        # Print the current directory name for tracking progress
         print(f"Processing directory: {dir_name}")
 
-        # Construct the full path to the current subdirectory
+        # Construct the full absolute path to the current directory
         dir_path = os.path.join(patches_dir, dir_name)
         print(f"Full path: {dir_path}")
 
-        # Only proceed if dir_path is a valid directory
+        # Only continue if this path is a directory (skip files)
         if not os.path.isdir(dir_path):
             continue
 
-        # List image files in the directory, excluding system files like .DS_Store
+        # List all image files in this directory, ignoring system files such as .DS_Store
         image_files = [
-            os.path.join(dir_path, file) for file in os.listdir(dir_path)
+            os.path.join(dir_path, file)
+            for file in os.listdir(dir_path)
             if file != '.DS_Store' and os.path.isfile(os.path.join(dir_path, file))
         ]
 
-        # Update the dictionary with the list of image files for the current directory
+        # Store the list of image files in the dictionary under this directory's path
         image_patches[dir_path] = image_files
 
-        # Update the total image count
+        # Increment the total count of image files by the number found here
         total_image_count += len(image_files)
 
-    # Return the dictionary of image patches and the total count of images found
+    # Return the updated dictionary and the total image count
     return image_patches, total_image_count
 
 def create_data_directories():
@@ -106,1164 +106,896 @@ def create_data_directories():
     Creates and manages data directories for training, validation, and testing datasets.
 
     This function:
-        - Detects whether the code is running inside a Docker container.
-        - Defines the base data directory accordingly (local or Docker environment).
-        - Deletes and recreates the base data directory if it already exists.
-        - Creates subdirectories for training, validation, and testing data.
-        - Further organizes data into 'Cancerous' and 'NotCancerous' subdirectories within each dataset type.
-        - Prints status messages to confirm directory creation.
+        - Detects whether running inside a Docker container.
+        - Defines base data directory accordingly (local vs Docker).
+        - Deletes and recreates the base data directory if it exists.
+        - Creates subdirectories for train, validation, and test datasets.
+        - Further organizes these datasets into 'Cancerous' and 'NotCancerous' subdirectories.
+        - Prints status messages confirming each directory creation.
 
     Returns:
-        tuple: A tuple containing the paths of the created directories:
-            - data_dir (str): The base data directory.
-            - train_dir (str): Directory for training data.
-            - val_dir (str): Directory for validation data.
-            - test_dir (str): Directory for testing data.
-
-    Behavior:
-        - If the base directory exists, it is removed before being recreated.
-        - Uses `os.makedirs` with `exist_ok=True` to ensure directories are created safely.
-        - Outputs messages indicating the success or failure of directory creation.
+        tuple: Paths of the created directories:
+            - data_dir (str): Base data directory.
+            - train_dir (str): Training data directory.
+            - val_dir (str): Validation data directory.
+            - test_dir (str): Testing data directory.
 
     Side Effects:
-        - Removes existing data directory (`data_dir`) if it already exists.
-        - Creates multiple subdirectories inside the base data directory.
-        - Prints confirmation messages to the console.
+        - Deletes existing data directory if present.
+        - Creates multiple nested directories.
+        - Prints creation success/failure messages.
     """
 
-    # Determine the base data directory based on the execution environment
+    # Detect environment and set base data directory path accordingly
     if os.path.exists('/.dockerenv'):
-        # Set the base data directory for the Docker environment
-        data_dir = '/data'
+        data_dir = '/data'  # Docker environment base directory
     else:
-        # Set the base data directory for local development
-        data_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data'
+        data_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data'  # Local environment
 
-    # Check if the base data directory exists
+    # Delete existing base directory if it exists to start fresh
     if os.path.exists(data_dir):
-        # Remove the directory and all its contents if it exists
         shutil.rmtree(data_dir)
         print(f"Directory '{data_dir}' has been deleted.")
     else:
-        # Notify if the directory doesn't exist
         print(f"Directory '{data_dir}' does not exist.")
 
-    # Create the base data directory
+    # Create base data directory
     os.makedirs(data_dir, exist_ok=True)
+    print(f"Directory '{data_dir}' created successfully." if os.path.exists(data_dir) else f"Failed to create '{data_dir}'.")
 
-    # Verify the creation of the base data directory and print the status
-    if os.path.exists(data_dir):
-        print(f"Directory '{data_dir}' created successfully.")
-    else:
-        # Notify if the directory creation fails
-        print(f"Failed to create the directory '{data_dir}'.")
+    # Helper function to create dataset subdirectories with 'Cancerous' and 'NotCancerous' folders
+    def create_subdirs(base_path):
+        os.makedirs(base_path, exist_ok=True)
+        for subfolder in ['Cancerous', 'NotCancerous']:
+            path = os.path.join(base_path, subfolder)
+            os.makedirs(path, exist_ok=True)
+            print(f"Directory '{path}' created successfully." if os.path.exists(path) else f"Failed to create '{path}'.")
 
-    # Determine the training data directory based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the training directory for the Docker environment
-        train_dir = '/data/train'
-    else:
-        # Set the training directory for local development
-        train_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/train'
+    # Define and create train directories
+    train_dir = os.path.join(data_dir, 'train')
+    create_subdirs(train_dir)
 
-    # Create the training directory
-    os.makedirs(train_dir, exist_ok=True)
+    # Define and create validation directories
+    val_dir = os.path.join(data_dir, 'val')
+    create_subdirs(val_dir)
 
-    # Verify the creation of the training directory and print the status
-    if os.path.exists(train_dir):
-        print(f"Directory '{train_dir}' created successfully.")
-    else:
-        # Notify if the training directory creation fails
-        print(f"Failed to create the directory '{train_dir}'.")
+    # Define and create test directories
+    test_dir = os.path.join(data_dir, 'test')
+    create_subdirs(test_dir)
 
-    # Determine the 'Cancerous' sub-directory for training data based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the cancerous training directory for the Docker environment
-        cancer_train_dir = '/data/train/Cancerous'
-    else:
-        # Set the cancerous training directory for local development
-        cancer_train_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/train/Cancerous'
-
-    # Create the 'Cancerous' training directory
-    os.makedirs(cancer_train_dir, exist_ok=True)
-
-    # Verify the creation of the 'Cancerous' training directory and print the status
-    if os.path.exists(cancer_train_dir):
-        print(f"Directory '{cancer_train_dir}' created successfully.")
-    else:
-        # Notify if the 'Cancerous' directory creation fails
-        print(f"Failed to create the directory '{cancer_train_dir}'.")
-
-    # Determine the 'NotCancerous' sub-directory for training data based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the 'NotCancerous' training directory for the Docker environment
-        notCancer_train_dir = '/data/train/NotCancerous'
-    else:
-        # Set the 'NotCancerous' training directory for local development
-        notCancer_train_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/train/NotCancerous'
-
-    # Create the 'NotCancerous' training directory
-    os.makedirs(notCancer_train_dir, exist_ok=True)
-
-    # Verify the creation of the 'NotCancerous' training directory and print the status
-    if os.path.exists(notCancer_train_dir):
-        print(f"Directory '{notCancer_train_dir}' created successfully.")
-    else:
-        # Notify if the 'NotCancerous' directory creation fails
-        print(f"Failed to create the directory '{notCancer_train_dir}'.")
-
-    # Determine the validation data directory based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the validation directory for the Docker environment
-        val_dir = '/data/val'
-    else:
-        # Set the validation directory for local development
-        val_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/val'
-
-    # Create the validation directory
-    os.makedirs(val_dir, exist_ok=True)
-
-    # Verify the creation of the validation directory and print the status
-    if os.path.exists(val_dir):
-        print(f"Directory '{val_dir}' created successfully.")
-    else:
-        # Notify if the validation directory creation fails
-        print(f"Failed to create the directory '{val_dir}'.")
-
-    # Determine the 'Cancerous' sub-directory for validation data based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the cancerous validation directory for the Docker environment
-        cancer_val_dir = '/data/val/Cancerous'
-    else:
-        # Set the cancerous validation directory for local development
-        cancer_val_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/val/Cancerous'
-
-    # Create the 'Cancerous' validation directory
-    os.makedirs(cancer_val_dir, exist_ok=True)
-
-    # Verify the creation of the 'Cancerous' validation directory and print the status
-    if os.path.exists(cancer_val_dir):
-        print(f"Directory '{cancer_val_dir}' created successfully.")
-    else:
-        # Notify if the 'Cancerous' validation directory creation fails
-        print(f"Failed to create the directory '{cancer_val_dir}'.")
-
-    # Determine the 'NotCancerous' sub-directory for validation data based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the 'NotCancerous' validation directory for the Docker environment
-        notCancer_val_dir = '/data/val/NotCancerous'
-    else:
-        # Set the 'NotCancerous' validation directory for local development
-        notCancer_val_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/val/NotCancerous'
-
-    # Create the 'NotCancerous' validation directory
-    os.makedirs(notCancer_val_dir, exist_ok=True)
-
-    # Verify the creation of the 'NotCancerous' validation directory and print the status
-    if os.path.exists(notCancer_val_dir):
-        print(f"Directory '{notCancer_val_dir}' created successfully.")
-    else:
-        # Notify if the 'NotCancerous' validation directory creation fails
-        print(f"Failed to create the directory '{notCancer_val_dir}'.")
-
-    # Determine the testing data directory based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the testing directory for the Docker environment
-        test_dir = '/data/test'
-    else:
-        # Set the testing directory for local development
-        test_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/test'
-
-    # Create the testing directory
-    os.makedirs(test_dir, exist_ok=True)
-
-    # Verify the creation of the testing directory and print the status
-    if os.path.exists(test_dir):
-        print(f"Directory '{test_dir}' created successfully.")
-    else:
-        # Notify if the testing directory creation fails
-        print(f"Failed to create the directory '{test_dir}'.")
-
-    # Determine the 'Cancerous' sub-directory for testing data based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the cancerous testing directory for the Docker environment
-        cancer_test_dir = '/data/test/Cancerous'
-    else:
-        # Set the cancerous testing directory for local development
-        cancer_test_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/test/Cancerous'
-
-    # Create the 'Cancerous' testing directory
-    os.makedirs(cancer_test_dir, exist_ok=True)
-
-    # Verify the creation of the 'Cancerous' testing directory and print the status
-    if os.path.exists(cancer_test_dir):
-        print(f"Directory '{cancer_test_dir}' created successfully.")
-    else:
-        # Notify if the 'Cancerous' testing directory creation fails
-        print(f"Failed to create the directory '{cancer_test_dir}'.")
-
-    # Determine the 'NotCancerous' sub-directory for testing data based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the 'NotCancerous' testing directory for the Docker environment
-        notCancer_test_dir = '/data/test/NotCancerous'
-    else:
-        # Set the 'NotCancerous' testing directory for local development
-        notCancer_test_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data/test/NotCancerous'
-
-    # Create the 'NotCancerous' testing directory
-    os.makedirs(notCancer_test_dir, exist_ok=True)
-
-    # Verify the creation of the 'NotCancerous' testing directory and print the status
-    if os.path.exists(notCancer_test_dir):
-        print(f"Directory '{notCancer_test_dir}' created successfully.")
-    else:
-        # Notify if the 'NotCancerous' testing directory creation fails
-        print(f"Failed to create the directory '{notCancer_test_dir}'.")
-
-    # Return the paths of the created data directories
+    # Return paths for base, train, val, and test directories
     return data_dir, train_dir, val_dir, test_dir
 
 def copy_directories_to_directories(dst_dir, dirs):
     """
-    Copies a list of source directories into specified target directories based on their category.
+    Copies a list of source directories into categorized target subdirectories under dst_dir.
 
-    This function:
-        - Iterates through the given list of directories.
-        - Identifies whether each directory belongs to the "Cancerous" or "NotCancerous" category.
-        - Copies each directory and its contents to the corresponding target directory under `dst_dir`.
+    For each directory in `dirs`:
+    - If its name contains "NotCancerous", copies it into dst_dir/NotCancerous/
+    - If its name contains "Cancerous", copies it into dst_dir/Cancerous/
+    - Ignores directories that don't match these categories.
 
     Args:
-        dst_dir (str): The destination root directory where categorized directories will be copied.
-        dirs (list of str): A list of source directory paths to be copied.
-
-    Behavior:
-        - Directories containing "NotCancerous" in their name are copied to `<dst_dir>/NotCancerous/`.
-        - Directories containing "Cancerous" in their name are copied to `<dst_dir>/Cancerous/`.
-        - If a directory does not match either category, it is ignored.
-
-    Returns:
-        None
+        dst_dir (str): Destination root directory.
+        dirs (list of str): List of source directory paths to copy.
 
     Side Effects:
-        - Creates the necessary destination directories if they do not exist.
-        - Copies directories and their contents using `shutil.copytree`.
-        - Prints a confirmation message for each copied directory.
+        - Creates directories under dst_dir if needed.
+        - Copies directories and their contents using shutil.copytree.
+        - Prints a confirmation message per copied directory.
     """
 
-    # Define the target directory paths for 'Cancerous' and 'NotCancerous' directories
+    # Define category subdirectories under destination directory
     cancer_dir_path = os.path.join(dst_dir, 'Cancerous')
     no_cancer_dir_path = os.path.join(dst_dir, 'NotCancerous')
 
-    # Iterate through each source directory in the provided list of directories
+    # Iterate over source directories
     for dir in dirs:
-        # Convert the current directory to a Path object for easier handling
         source_dir = Path(dir)
 
-        # Determine the appropriate target directory based on the name of the source directory
+        # Assign target directory based on category found in source directory's name
         if "NotCancerous" in str(dir):
-            target_dir = no_cancer_dir_path  # Set the target for 'NotCancerous' directories
+            target_dir = no_cancer_dir_path
         elif "Cancerous" in str(dir):
-            target_dir = cancer_dir_path  # Set the target for 'Cancerous' directories
+            target_dir = cancer_dir_path
+        else:
+            # Skip directories that don't match expected categories
+            continue
 
-        # Construct the full target path by joining the target directory with the source directory's name
+        # Compose full target path including source directory name
         target_path = os.path.join(target_dir, os.path.basename(source_dir))
 
-        # Copy the entire source directory, including its contents, to the target directory
+        # Copy the entire source directory to target location
         shutil.copytree(source_dir, target_path)
 
-        # Print a confirmation message indicating successful directory copy
+        # Confirm copy operation
         print(f"Directory '{source_dir}' has been copied into '{target_dir}' as '{target_path}'.")
 
 def define_train_transformer():
     """
-    Defines and returns a transformation pipeline for preprocessing training images.
+    Defines a composed image transformation pipeline for training data preprocessing and augmentation.
 
-    The transformation includes:
-        - Converting images to grayscale with a single output channel.
-        - Random horizontal and vertical flipping to augment data and improve model generalization.
-        - Applying random brightness adjustments while keeping contrast and saturation unchanged.
-        - Converting images to a PyTorch tensor for deep learning model compatibility.
-        - An optional reshaping step (commented out) for potential future adjustments.
+    Transformations applied:
+    - Convert images to grayscale with a single channel (drops color information).
+    - Randomly flip images horizontally and vertically to augment data.
+    - Apply random brightness adjustment while keeping contrast and saturation unchanged.
+    - Convert images to PyTorch tensors for model input.
+    - (Optional) reshape the tensor, currently commented out.
 
     Returns:
-        torchvision.transforms.Compose: A composed transformation to be applied to the training dataset.
+        torchvision.transforms.Compose: Transformation pipeline for training images.
     """
-
-    # Create a composed transform consisting of multiple transformations
     transform = transforms.Compose([
-                transforms.Grayscale(num_output_channels=1),  # Convert the image to grayscale with 1 output channel (removes color information)
-                transforms.RandomHorizontalFlip(),            # Randomly flip the image horizontally (with 50% probability)
-                transforms.RandomVerticalFlip(),              # Randomly flip the image vertically (with 50% probability)
-                transforms.ColorJitter(                       # Apply random changes to brightness, contrast, saturation, and hue
-                brightness=1.5,                           # Increase brightness by a factor of up to 1.5
-                contrast=1.0,                             # Keep contrast unchanged
-                saturation=1.0,                           # Keep saturation unchanged (since it's grayscale, this won't have much effect)
-                hue=0                                     # Shift hue by up to 1.0 (maximum hue shift)
-                ),
-                transforms.ToTensor(),                        # Convert the processed image to a PyTorch tensor for model input
-                # transforms.Lambda(lambda x: x.reshape(1, 4608, 4608))  # (Optional) Reshape if needed, comment left in case reshaping is required
+        transforms.Grayscale(num_output_channels=1),  # Convert to grayscale (1 channel)
+        transforms.RandomHorizontalFlip(),            # Random horizontal flip (50% chance)
+        transforms.RandomVerticalFlip(),              # Random vertical flip (50% chance)
+        transforms.ColorJitter(
+            brightness=1.5,    # Brightness varies up to ±50%
+            contrast=1.0,      # Contrast unchanged
+            saturation=1.0,    # Saturation unchanged (no effect on grayscale)
+            hue=0              # No hue change
+        ),
+        transforms.ToTensor(),                        # Convert to tensor for PyTorch
+        # transforms.Lambda(lambda x: x.reshape(1, 4608, 4608))  # Optional reshaping (commented)
     ])
-
-    # Return the defined transformation
     return transform
 
 def define_val_test_transformer():
     """
-    Defines and returns a transformation pipeline for preprocessing validation and testing images.
+    Defines a composed image transformation pipeline for validation and testing data preprocessing.
 
-    The transformation includes:
-        - Converting images to grayscale with a single output channel.
-        - Converting images to a PyTorch tensor for compatibility with deep learning models.
-        - An optional reshaping step (commented out) for potential future adjustments.
+    Transformations applied:
+    - Convert images to grayscale with a single channel.
+    - Convert images to PyTorch tensors.
+    - (Optional) reshape tensor, currently commented out.
 
     Returns:
-        torchvision.transforms.Compose: A composed transformation to be applied to validation and testing datasets.
+        torchvision.transforms.Compose: Transformation pipeline for validation/testing images.
     """
-
-    # Create a composed transform for validation and testing dataset
     transform = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),  # Convert the image to grayscale with 1 output channel (removing color information)
-        transforms.ToTensor(),                          # Convert the processed image to a PyTorch tensor for model input
-        # transforms.Lambda(lambda x: x.reshape(1, 4608, 4608))  # (Optional) Reshape if needed; left commented for potential future use
+        transforms.Grayscale(num_output_channels=1),  # Convert to grayscale (1 channel)
+        transforms.ToTensor(),                          # Convert to tensor for PyTorch
+        # transforms.Lambda(lambda x: x.reshape(1, 4608, 4608))  # Optional reshaping (commented)
     ])
-
-    # Return the defined transformation for testing
     return transform
 
 def sampler(dataset, count, size=1000):
     """
-    Creates a weighted sampler for a given dataset to ensure balanced class representation
-    during training by sampling underrepresented classes more frequently.
+    Creates a weighted sampler to balance class representation during training.
 
-    This function:
-    1. Counts the occurrences of each class in the dataset.
-    2. Calculates class weights as the inverse of the class frequencies.
-    3. Constructs a `WeightedRandomSampler` that samples from the dataset using the
-       calculated class weights, allowing more frequent sampling of underrepresented classes.
-    4. Returns the sampler for use with a DataLoader.
+    It computes inverse-frequency weights so that underrepresented classes
+    are sampled more frequently, and returns a WeightedRandomSampler.
 
     Args:
-        dataset (torch.utils.data.Dataset): The dataset from which to sample.
-                                            It must have a `targets` attribute with class labels.
-        count (int): The number of samples to consider from the dataset.
-        size (int, optional): The number of samples to draw from the dataset (default is 1000).
+        dataset (torch.utils.data.Dataset): Dataset with a 'targets' attribute listing class labels.
+        count (int): Number of dataset samples to consider (typically length of dataset).
+        size (int, optional): Number of samples to draw in each epoch (default 1000).
 
     Returns:
-        torch.utils.data.sampler.WeightedRandomSampler: A sampler that uses the calculated class weights
-                                                        to sample data points with replacement.
+        torch.utils.data.sampler.WeightedRandomSampler: Sampler with class-balanced sampling weights.
     """
 
-    # Count the occurrences of each class in the dataset using Counter
+    # Count how many samples exist per class
     class_counter = dict(Counter(dataset.targets))
 
-    # Calculate class weights as the inverse of the class frequencies.
-    # This gives higher weight to underrepresented classes,
-    # ensuring they are sampled more frequently.
+    # Compute weights as inverse of class counts for balancing
     class_weights = 1 / torch.Tensor([ct for ct in class_counter.values()])
 
-    # # Create a list of indices for the training dataset.
-    # # Use the count parameter to generate indices from 0 to count-1.
+    # Prepare indices for the dataset
     dataset_indices = list(range(len(dataset)))
 
-    # Retrieve the targets (labels) for the training dataset using the calculated indices.
+    # Get labels for all samples in dataset_indices
     targets = torch.Tensor(dataset.targets)[dataset_indices]
 
-    # Create a WeightedRandomSampler to sample from the dataset.
-    # The sampler uses the calculated sample weights to ensure balanced sampling.
-    # The `size` parameter determines how many samples to draw from the dataset.
-    # `replacement=True` allows the same sample to be drawn multiple times,
-    # enabling the selection of underrepresented classes more frequently.
-    sample_weights = []
-    for target in targets:
-        sample_weights.append(class_weights[int(target)])
+    # Assign a sampling weight to each sample based on its class weight
+    sample_weights = [class_weights[int(target)] for target in targets]
 
-    # Initialize the WeightedRandomSampler with the calculated sample weights
-    # and the specified size for the number of samples to draw.
-    weighted_sampler = torch.utils.data.sampler.WeightedRandomSampler(sample_weights, size, replacement=True)
+    # Create WeightedRandomSampler with replacement to oversample minority classes
+    weighted_sampler = torch.utils.data.sampler.WeightedRandomSampler(
+        sample_weights, size, replacement=True
+    )
 
-    # Return the weighted sampler
     return weighted_sampler
 
 def splitting_data(image_patches, total_image_count, train_ratio=0.60, val_ratio=0.20, test_ratio=0.20, batch_size=32):
     """
-    Splits the provided image patches into training, validation, and testing datasets,
-    and returns DataLoader objects for each dataset.
+    Split image patches into training, validation, and test sets, then create DataLoaders.
 
-    This function:
-    1. Creates directories for storing training, validation, and testing data.
-    2. Shuffles and sorts the image patches.
-    3. Distributes image patches into respective datasets based on the given ratios.
-    4. Copies image files into the appropriate directories for training, validation, and testing.
-    5. Defines and applies transformations to the datasets.
-    6. Creates DataLoader objects for training, validation, and testing datasets,
-       with a weighted sampler for the training set to handle class imbalance.
+    Steps:
+    1. Create directories for train/val/test datasets.
+    2. Shuffle and sort input image patch directories.
+    3. Allocate directories to train/val/test sets based on desired ratios.
+    4. Copy image files to their respective directories.
+    5. Define transformations for each set.
+    6. Create PyTorch DataLoaders with appropriate samplers and batching.
 
     Args:
-        image_patches (dict): A dictionary where the keys are image directories,
-                              and the values are lists of image files in each directory.
-        total_image_count (int): The total number of images to be split into datasets.
-        train_ratio (float, optional): The proportion of images to be used for training (default is 0.68).
-        val_ratio (float, optional): The proportion of images to be used for validation (default is 0.16).
-        test_ratio (float, optional): The proportion of images to be used for testing (default is 0.16).
-        batch_size (int, optional): The batch size to be used in the DataLoader (default is 32).
+        image_patches (dict): {directory_path: [list_of_image_files]} mapping.
+        total_image_count (int): Total number of image files.
+        train_ratio (float): Fraction of data for training (default 0.60).
+        val_ratio (float): Fraction of data for validation (default 0.20).
+        test_ratio (float): Fraction of data for testing (default 0.20).
+        batch_size (int): Number of samples per batch in DataLoader (default 32).
 
     Returns:
-        tuple: A tuple containing three DataLoader objects:
-            - train_loader (DataLoader): DataLoader for the training dataset.
-            - val_loader (DataLoader): DataLoader for the validation dataset.
-            - test_loader (DataLoader): DataLoader for the testing dataset.
+        tuple: (train_loader, val_loader, test_loader) PyTorch DataLoader objects.
     """
 
-    # Create directories for training, validation, and testing data
+    # Create directories to store the split datasets
     data_dir, train_dir, val_dir, test_dir = create_data_directories()
 
-    # Get the keys from the image patches and shuffle them
+    # Get all keys (directories) and shuffle them for randomness
     image_keys = list(image_patches.keys())
-    random.shuffle(image_keys)  # Randomly shuffle keys to ensure a diverse split
+    random.shuffle(image_keys)
 
-    # Sort the image patches based on shuffled keys
+    # Map shuffled keys back to patches dict for ordered iteration
     sorted_image_patches = {key: image_patches[key] for key in image_keys}
 
-    # Calculate the number of images for training, validation, and testing
+    # Calculate number of images per split based on ratios
     train_count = round(train_ratio * total_image_count)
     val_count = round(val_ratio * total_image_count)
     test_count = round(test_ratio * total_image_count)
 
-    # Initialize lists to store directories for each dataset
-    train_dirs = []
-    val_dirs = []
-    test_dirs = []
+    # Lists to hold directories assigned to each split
+    train_dirs, val_dirs, test_dirs = [], [], []
 
-    # Initialize counters for current counts of images in each dataset
+    # Counters to keep track of how many images allocated to each split
     cur_train_count = 0
     cur_val_count = 0
     cur_test_count = 0
 
-    # Distribute image files into training, validation, and testing directories
+    # Allocate directories to train/val/test splits ensuring approximate ratios
     for image_path, image_files in sorted_image_patches.items():
-        count = len(image_files)  # Get the number of image files in the current directory
-        # Check if we can add to the training dataset
+        count = len(image_files)
         if (cur_train_count + count) < train_count:
-            cur_train_count += count  # Update current training count
-            train_dirs.append(image_path)  # Add current path to training directories
+            cur_train_count += count
+            train_dirs.append(image_path)
+        elif (cur_val_count + count) < val_count:
+            cur_val_count += count
+            val_dirs.append(image_path)
         else:
-            # If not enough space in training, check validation dataset
-            if (cur_val_count + count) < val_count:
-                cur_val_count += count  # Update current validation count
-                val_dirs.append(image_path)  # Add current path to validation directories
-            else:
-                # Otherwise, add to testing dataset
-                cur_test_count += count  # Update current testing count
-                test_dirs.append(image_path)  # Add current path to testing directories
+            cur_test_count += count
+            test_dirs.append(image_path)
 
-    # Creates necessary directories for organizing training, validation, and testing data
+    # Create the directory structure again if needed (safe call)
     create_data_directories()
 
-    # Copy the image files to their respective locations
+    # Copy image files into their respective directories for each split
     copy_directories_to_directories(train_dir, train_dirs)
     copy_directories_to_directories(val_dir, val_dirs)
     copy_directories_to_directories(test_dir, test_dirs)
 
-    # Define the transformations to be applied to the training, validation, and testing images
-    train_transform = define_train_transformer()  # Transformations for the training dataset
-    val_transform = define_val_test_transformer()  # Transformations for the validation dataset
-    test_transform = define_val_test_transformer() # Transformations for the testing dataset
+    # Define image transforms for training, validation, and testing sets
+    train_transform = define_train_transformer()
+    val_transform = define_val_test_transformer()
+    test_transform = define_val_test_transformer()
 
-    # Create datasets for training, validation, and testing
-
-    # Load the training dataset using ImageFolder and apply the specified transformations.
-    # Create a weighted sampler for the training dataset to ensure balanced class representation.
-    # Initialize a DataLoader for the training dataset with the specified batch size.
-    # The weighted sampler is used to sample data points, allowing for more frequent sampling of underrepresented classes.
+    # Load datasets applying transforms
     train_dataset = datasets.ImageFolder(train_dir, transform=train_transform)
-    weighted_sampler = sampler(train_dataset, cur_train_count)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler)
-
-    # Load the validation dataset using ImageFolder and apply the specified transformations.
-    # Initialize a DataLoader for the validation dataset with the specified batch size.
-    # The validation DataLoader does not use a sampler, ensuring the data is drawn sequentially.
     val_dataset = datasets.ImageFolder(val_dir, transform=val_transform)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
-
-    # Load the testing dataset using ImageFolder and apply the specified transformations.
-    # Initialize a DataLoader for the testing dataset with the specified batch size.
-    # Similar to the validation loader, this does not use a sampler for sequential access.
     test_dataset = datasets.ImageFolder(test_dir, transform=test_transform)
+
+    # Create a weighted sampler for training to balance classes
+    weighted_sampler = sampler(train_dataset, cur_train_count)
+
+    # Create DataLoaders with batch size and sampler (train) or shuffle (val/test)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
-    # Return the DataLoader objects for training, validation, and testing datasets.
     return train_loader, val_loader, test_loader
 
 class ModelEmbedding(nn.Module):
     '''
-    A custom model wrapper that modifies a given model architecture by removing
-    its final output layer and adding a linear layer for extracting embeddings.
+    Custom model wrapper that removes the original model's final layer,
+    adds a linear embedding layer, and includes a final classification layer.
 
-    This class is designed to facilitate feature extraction by:
-    1. Removing the model's original final layer.
-    2. Adding a new linear layer to extract embeddings from the features.
-    3. Including an additional final output layer for classification,
-       allowing the model to be used for both embedding extraction and classification tasks.
+    This allows simultaneous feature embedding extraction and classification.
 
     Attributes:
-        features (nn.Sequential): A sequential container of layers excluding the final output layer.
-        linear (nn.Linear): A linear layer for embedding extraction.
-        relu (nn.ReLU): A ReLU activation function applied after the linear transformation.
-        finlinear (nn.Linear): The final fully connected layer used for classification.
+        features (nn.Sequential): Original model layers except the final output layer.
+        linear (nn.Linear): Linear layer to transform features into embeddings.
+        relu (nn.ReLU): ReLU activation applied after the linear layer.
+        finlinear (nn.Linear): Final classification layer producing class logits.
     '''
 
     def __init__(self, original_model):
         '''
-        Initializes the ModelEmbedding by modifying the original model.
+        Initialize ModelEmbedding by modifying the given pre-trained model.
 
         Args:
-            original_model (nn.Module): The pre-trained model whose final output layer
-                                         will be removed for embedding extraction.
+            original_model (nn.Module): Pre-trained model to modify by removing final layer.
         '''
-        # Initialize the parent class (nn.Module) to set up the module properly
         super(ModelEmbedding, self).__init__()
 
-        # Remove the original model's final output layer
+        # Extract all layers except the last from original model to use as feature extractor
         self.features = nn.Sequential(*list(original_model.children()))[:-1]
 
-        # Add a linear layer for embedding extraction
+        # Linear layer to project extracted features to embeddings of size `feature_dim`
         self.linear = nn.Linear(feature_dim, feature_dim)
+
+        # ReLU activation for non-linearity after linear embedding layer
         self.relu = nn.ReLU(inplace=True)
 
-        # Add a new output layer with the appropriate number of output classes
+        # Final classification layer outputting logits for `num_classes` classes
         self.finlinear = nn.Linear(in_features=feature_dim, out_features=num_classes, bias=True)
 
     def forward(self, x):
         '''
-        Defines the forward pass of the ModelEmbedding.
-
-        This method processes the input through the feature extraction layers,
-        applies embedding extraction, and then produces the final classification output.
+        Forward pass through the model.
 
         Args:
-            x (torch.Tensor): The input tensor, typically a batch of images.
+            x (torch.Tensor): Input tensor, typically image batch of shape (batch_size, channels, H, W).
 
         Returns:
-            tuple: A tuple containing:
-                - embedding_out (torch.Tensor): The extracted embeddings after the linear transformation and ReLU.
-                - out (torch.Tensor): The output from the final classification layer.
+            tuple:
+                embedding_out (torch.Tensor): Embedding vector after linear layer and ReLU, shape (batch_size, feature_dim).
+                out (torch.Tensor): Classification logits, shape (batch_size, num_classes).
         '''
-        # Pass input through the feature extraction layers of the original model
+        # Pass input through feature extractor layers
         embedding = self.features(x)
 
-        # Reshape the embedding tensor to (batch_size, num_features) for compatibility with the linear layer
+        # Flatten feature maps to (batch_size, feature_dim)
         embedding = embedding.view(embedding.size(0), -1)
 
-        # Apply the linear layer and ReLU activation to extract the embedding
+        # Extract embeddings by linear transformation + ReLU activation
         embedding_out = self.relu(self.linear(embedding))
 
-        # Pass the original embedding through the final output layer for classification
+        # Compute classification output from original embedding features
         out = self.finlinear(embedding)
 
-        # Return both the extracted embedding and the final output
+        # Return embeddings and classification output
         return embedding_out, out
 
 def load_model():
     """
-    Loads a pre-trained ResNet34 model, modifies it for grayscale image input,
+    Loads a pre-trained ResNet18 model, modifies it for grayscale image input,
     and prepares it for training or inference with a custom final fully connected layer.
 
-    The function performs the following operations:
-    1. Loads the ResNet34 model pre-trained on ImageNet.
-    2. Modifies the first convolutional layer (`conv1`) to accept grayscale images
-       (1 input channel) by changing the input channel size and adjusting
-       kernel, stride, and padding.
-    3. Replaces the average pooling layer (`avgpool`) with an adaptive average pooling
-       layer that outputs a size of (1, 1).
-    4. Modifies the fully connected layer (`fc`) to match the number of classes (`num_classes`).
-    5. Wraps the model in a custom `ModelEmbedding` class to extract embeddings
-       by removing the final classification layer.
-    6. Moves the model to a GPU if available, otherwise to a CPU for training or inference.
+    Steps:
+    1. Load ResNet18 pretrained on ImageNet.
+    2. Replace first conv layer to accept single-channel grayscale images.
+    3. Replace average pooling with adaptive average pooling (output size 1x1).
+    4. Modify final fully connected layer to output the desired number of classes.
+    5. Wrap model with a custom ModelEmbedding class to enable feature embedding extraction.
+    6. Move model to GPU if available, else CPU.
 
     Returns:
-        tuple:
-            - device (torch.device): The device to which the model is transferred (GPU/CPU).
-            - model (torch.nn.Module): The modified ResNet34 model ready for use.
-
+        device (torch.device): The computation device used (GPU or CPU).
+        model (torch.nn.Module): The modified ResNet18 model wrapped with ModelEmbedding.
     """
 
-    # Load the ResNet18 architecture pre-trained model
+    # Load pretrained ResNet18 model
     model = models.resnet18(pretrained=True)
 
-    # Replace the first convolutional layer (conv1) of the model
-    # in_channels=1: The number of input channels is set to 1 (for grayscale images)
-    # out_channels=64: The number of output feature maps produced by this convolution layer
-    # kernel_size=3: The size of the kernel (filter) used in this convolution operation is 3x3
-    # stride=2: The stride (step size) the filter takes when moving across the input
-    # padding=3: Zero-padding added around the input to preserve spatial dimensions
-    # bias=False: No bias term is added in the convolution operation
-    model.conv1 = nn.Conv2d(in_channels=1,
-                            out_channels=64,
-                            kernel_size=3,
-                            stride=2,
-                            padding=3,
-                            bias=False)
+    # Modify first conv layer for grayscale input (1 channel)
+    model.conv1 = nn.Conv2d(
+        in_channels=1,
+        out_channels=64,
+        kernel_size=3,
+        stride=2,
+        padding=3,
+        bias=False
+    )
 
-    # Change the average pooling layer to adaptive pooling
+    # Replace average pooling with adaptive average pooling (output size 1x1)
     model.avgpool = nn.AdaptiveAvgPool2d(output_size=(1, 1))
 
-    # Modify the final fully connected layer
+    # Modify final fully connected layer for custom number of classes
     model.fc = nn.Linear(model.fc.in_features, num_classes)
 
-    # Wrap the modified model using the custom ModelEmbedding class
-    # to remove the last layer and add layers for embedding extraction
+    # Wrap model to extract embeddings by removing final layer
     model = ModelEmbedding(model)
 
-    # Set the device to GPU if available, otherwise use CPU
+    # Select device: GPU if available, else CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Move the model to the device (GPU or CPU) for training/inference
-    model.to(device)  # Transfer the model to the specified device (GPU or CPU)
+    # Transfer model to the chosen device
+    model.to(device)
 
-    return device, model  # Return the modified model for further use
+    return device, model
 
 def get_activation(name, activation):
     """
-    Returns a hook function to capture the output (activation) of a specified layer in a neural network.
+    Creates a forward hook function to capture activations of a given model layer.
 
-    This function is typically used to register forward hooks on layers of a PyTorch model, allowing
-    access to intermediate activations during inference or training.
+    This hook can be registered on any layer to store its output during forward pass.
 
-    Parameters:
-    name (str): The name of the layer whose activation is being captured.
-    activation (dict): A dictionary where the captured activations will be stored.
-                       The key is `name`, and the value is the detached output tensor of the layer.
+    Args:
+        name (str): Identifier key for the activation dictionary.
+        activation (dict): Dictionary to store activations by name.
 
     Returns:
-    function: A hook function that captures and stores the activation of the specified layer.
-
-    Hook Function Behavior:
-    - Takes three arguments: `model` (the layer/module), `input` (the layer input, not used),
-      and `output` (the layer output).
-    - Stores the detached output tensor in the `activation` dictionary under the given `name`.
-    - Uses `.detach()` to prevent computation graph tracking and gradient updates.
-
-    Example Usage:
-    >>> activation_dict = {}
-    >>> model.layer_name.register_forward_hook(get_activation("layer_name", activation_dict))
-
-    After a forward pass, `activation_dict["layer_name"]` will contain the activations of `layer_name`.
+        function: A hook function that stores the detached output of the layer.
     """
 
     def hook(model, input, output):
-        # Store the output of the layer in the activation dictionary
-        # The tensor is detached to avoid interfering with backpropagation.
+        # Detach output tensor to avoid affecting gradients and store in activation dict
         activation[name] = output.detach()
 
     return hook
 
 def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.9, factor=0.5, patience=3):
     """
-    Initializes and returns the loss function, optimizer, and learning rate scheduler for training a model.
+    Initializes and returns the loss function, optimizer, and learning rate scheduler for model training.
 
-    Parameters:
-    model (torch.nn.Module): The neural network model to be trained.
-    learningRate (float, optional): The initial learning rate for the optimizer. Default is 1e-4.
-    weight_decay (float, optional): Weight decay (L2 penalty) for regularization. Default is 1e-6.
-    momentum (float, optional): Momentum parameter (not used in AdamW, included for consistency). Default is 0.7.
-    factor (float, optional): Factor by which the learning rate is reduced when the scheduler is triggered. Default is 0.5.
-    patience (int, optional): Number of epochs to wait before reducing the learning rate if no improvement is seen. Default is 3.
+    Args:
+        model (torch.nn.Module): The neural network model to be trained.
+        learningRate (float, optional): Initial learning rate for the optimizer. Default is 1e-4.
+        weight_decay (float, optional): Weight decay (L2 regularization) factor. Default is 1e-4.
+        momentum (float, optional): Momentum parameter (not used by AdamW, included for consistency). Default is 0.9.
+        factor (float, optional): Multiplicative factor to reduce learning rate when scheduler triggers. Default is 0.5.
+        patience (int, optional): Number of epochs with no improvement before reducing LR. Default is 3.
 
     Returns:
-    tuple: Contains:
-        - criterion (torch.nn.CrossEntropyLoss): Loss function used for multi-class classification.
-        - optimizer (torch.optim.AdamW): AdamW optimizer initialized with the specified learning rate and weight decay.
-        - scheduler (torch.optim.lr_scheduler.ReduceLROnPlateau): Learning rate scheduler that reduces the learning rate when validation loss stagnates.
-
-    Example Usage:
-    >>> model = MyNeuralNet()
-    >>> criterion, optimizer, scheduler = get_params(model)
+        tuple:
+            criterion (torch.nn.CrossEntropyLoss): Loss function for classification tasks.
+            optimizer (torch.optim.AdamW): AdamW optimizer with specified LR and weight decay.
+            scheduler (torch.optim.lr_scheduler.ReduceLROnPlateau): LR scheduler that reduces LR on plateau.
     """
 
-    # Define the loss function as CrossEntropyLoss, commonly used for multi-class classification tasks.
+    # CrossEntropyLoss is suitable for multi-class classification problems
     criterion = nn.CrossEntropyLoss()
 
-    # Initialize the AdamW optimizer for the model's parameters with the specified learning rate.
-    # The 'momentum' argument is not applicable for AdamW but is included for consistency with other optimizers.
-    # optimizer = torch.optim.Adam(model.parameters(), lr=learningRate, weight_decay=weight_decay)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learningRate, weight_decay=weight_decay)
+    # AdamW optimizer includes weight decay for regularization
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learningRate, weight_decay=weight_decay)
 
-    # Set up a learning rate scheduler that reduces the learning rate when a plateau in validation loss is detected.
-    # The 'factor' specifies how much to reduce the learning rate.
-    # The 'patience' defines how many epochs to wait before reducing the learning rate if no improvement is seen.
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=factor, patience=patience)
+    # ReduceLROnPlateau scheduler lowers LR when validation loss stops improving
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=factor, patience=patience)
 
-    # Return the defined loss function, optimizer, and learning rate scheduler.
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=30, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=2, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
-    Main function for training the model.
+    Trains the model over multiple epochs, tracking training and validation metrics.
 
     Args:
-        model (torch.nn.Module): The PyTorch model to be trained.
-        device (torch.device): The device to train the model on (CPU or GPU).
-        train_loader (torch.utils.data.DataLoader): DataLoader for the training dataset.
-        val_loader (torch.utils.data.DataLoader): DataLoader for the validation dataset.
-        criterion (torch.nn.Module): The loss function used for training.
-        optimizer (torch.optim.Optimizer): The optimizer used for updating model parameters.
-        scheduler (torch.optim.lr_scheduler): The scheduler for dynamically adjusting the learning rate.
-        num_epochs (int): The number of epochs to train the model.
-        start_epoch (int, optional): The epoch from which to resume training. Default is 0.
-        all_train_loss (list, optional): List to store the training losses for each epoch. Default is an empty list.
-        all_val_loss (list, optional): List to store the validation losses for each epoch. Default is an empty list.
-        all_train_acc (list, optional): List to store the training accuracies for each epoch. Default is an empty list.
-        all_val_acc (list, optional): List to store the validation accuracies for each epoch. Default is an empty list.
+        model (torch.nn.Module): The PyTorch model to train.
+        device (torch.device): Device to run computations on (CPU or GPU).
+        train_loader (DataLoader): DataLoader for training data.
+        val_loader (DataLoader): DataLoader for validation data.
+        criterion (nn.Module): Loss function.
+        optimizer (torch.optim.Optimizer): Optimizer to update model parameters.
+        scheduler (torch.optim.lr_scheduler or None): Learning rate scheduler (optional).
+        num_epochs (int): Number of epochs to train.
+        start_epoch (int, optional): Epoch number to start training from (for resuming).
+        all_train_embeddings (list, optional): List to accumulate train embeddings over epochs.
+        all_val_embeddings (list, optional): List to accumulate val embeddings over epochs.
+        all_train_loss (list, optional): List to accumulate train loss per epoch.
+        all_val_loss (list, optional): List to accumulate val loss per epoch.
+        all_train_acc (list, optional): List to accumulate train accuracy per epoch.
+        all_val_acc (list, optional): List to accumulate val accuracy per epoch.
 
     Returns:
-        tuple: A tuple containing:
-            - all_train_embeddings (list): Extracted embeddings from training data.
-            - all_val_embeddings (list): Validation embeddings from validation data.
-            - all_train_loss (list): Training losses for each epoch.
-            - all_val_loss (list): Validation losses for each epoch.
-            - all_train_acc (list): Training accuracies for each epoch.
-            - all_val_acc (list): Validation accuracies for each epoch.
+        tuple: Updated lists containing embeddings, loss, and accuracy metrics for train and val sets.
     """
 
-    # Set the model to training mode
+    # Set model to training mode (enables dropout, batchnorm updates, etc.)
     model.train()
 
-    # Initialize variables to track total accuracy and loss
+    # Initialize counters for correct predictions and total samples processed
     total = 0
     accuracy = 0
 
-    # Initialize lists to store training metrics
-    train_embeddings = []  # To store the extracted embeddings
-    train_loss = []  # To store the training losses
+    # Lists to store batch-wise embeddings and losses during training
+    train_embeddings = []
+    train_loss = []
 
-    # Assuming num_classes is defined globally or passed as a parameter
-    train_confusion_matrix = torch.zeros(num_classes, num_classes)  # Ensure num_classes is defined
+    # Initialize confusion matrix for training data (num_classes should be globally defined)
+    train_confusion_matrix = torch.zeros(num_classes, num_classes)
 
-    # Start training over the specified number of epochs
+    # Loop over each epoch
     for epoch in range(start_epoch, num_epochs):
-
-        avg_loss = 0.0  # Initialize average loss for the current epoch
-
+        avg_loss = 0.0  # Running average loss over batches
         losses = []
         accuracies = []
 
-        # Iterate through batches of the training dataset
+        # Iterate over batches from training DataLoader
         for batch_num, (feats, labels) in enumerate(train_loader):
+            # Reshape features to match model input dimensions (batch, channel, height, width)
+            feats = feats.reshape(-1, 1, feature_dim, feature_dim)
 
-            # Reshape the features to match the input dimensions of the model
-            feats = feats.reshape(-1, 1, feature_dim, feature_dim)  # Ensure feature_dim is defined
-            feats, labels = feats.to(device), labels.to(device)  # Move to the specified device
+            # Move features and labels to the specified device (CPU/GPU)
+            feats, labels = feats.to(device), labels.to(device)
 
-            # Clear the gradients for the optimizer
+            # Zero out gradients to avoid accumulation from previous batch
             optimizer.zero_grad()
 
-            # Pass the features through the model
+            # Forward pass through the model: outputs and embeddings (assuming model returns both)
             _, outputs = model(feats)
 
-            # Get predicted labels by applying softmax and taking the maximum
+            # Predict class labels using softmax probabilities
             _, pred_labels = torch.max(F.softmax(outputs, dim=1), 1)
-            pred_labels = pred_labels.view(-1)
+            pred_labels = pred_labels.view(-1)  # Flatten predictions
 
-            # Update the confusion matrix
+            # Update confusion matrix counts for this batch
             for t, p in zip(labels.view(-1), pred_labels):
                 train_confusion_matrix[t.long(), p.long()] += 1
 
-            # Assuming 'activation' is a defined variable within the model
+            # Extract embeddings from model's stored activations (if available)
             if 'avg_pool' in activation:
-                train_embeddings.append(activation['avg_pool'].detach().cpu().numpy())  # Extract embeddings
+                train_embeddings.append(activation['avg_pool'].detach().cpu().numpy())
 
-            # Calculate the loss
-            loss = criterion(outputs, labels.long())  # Compute the loss
-            loss.backward()  # Backpropagate the loss
+            # Compute loss between model predictions and true labels
+            loss = criterion(outputs, labels.long())
 
-            # Update the model parameters
+            # Backpropagation to compute gradients
+            loss.backward()
+
+            # Optimizer step to update model weights
             optimizer.step()
 
-            # Update accuracy for the current batch
+            # Calculate number of correct predictions in this batch
             curr_accuracy = torch.sum(torch.eq(pred_labels, labels)).item()
 
-            accuracy += curr_accuracy  # Increment correct predictions
-            total += len(labels)  # Increment total number of samples
+            # Update running totals
+            accuracy += curr_accuracy
+            total += len(labels)
 
-            # Store loss for each sample in the batch
+            # Record batch loss (repeated for each sample in batch)
             train_loss.extend([loss.item()] * feats.size(0))
 
-            # Calculate average loss for the last 8 batches
+            # Accumulate batch loss for averaging
             avg_loss += loss.item()
+
+            # Print average loss every 8 batches for monitoring
             if (batch_num + 1) % 8 == 0:
-                print('Training Epoch: {}\tBatch: {}\tAvg-Loss: {:.4f}'.format(epoch + 1, batch_num + 1, avg_loss / 8))
+                print(f'Training Epoch: {epoch + 1}\tBatch: {batch_num + 1}\tAvg-Loss: {avg_loss / 8:.4f}')
                 avg_loss = 0.0  # Reset average loss after printing
 
-            # Free up unused memory on the GPU
+            # Clear unused GPU memory to prevent leaks
             torch.cuda.empty_cache()
 
-            # Delete variables to free up memory after each batch
+            # Explicitly delete variables to free memory
             del feats, labels, loss, outputs
 
-        # Print the confusion matrix and normalized confusion matrix for accuracy analysis
+        # Print confusion matrix and per-class accuracy for training data
         print("Training Confusion Matrix:\n", train_confusion_matrix)
-        print("Training Normalized Confusion Matrix (per-class accuracy):\n", train_confusion_matrix.diag() / train_confusion_matrix.sum(1))
+        print("Training Normalized Confusion Matrix (per-class accuracy):\n",
+              train_confusion_matrix.diag() / train_confusion_matrix.sum(1))
 
-        # Calculate average training loss and accuracy for the epoch
-        avg_train_loss = np.mean(train_loss) if len(train_loss) > 0 else 0  # Use the mean if train_loss is not empty
-        avg_train_acc = accuracy / total if total > 0 else 0  # Avoid division by zero
+        # Compute average training loss and accuracy over entire epoch
+        avg_train_loss = np.mean(train_loss) if len(train_loss) > 0 else 0
+        avg_train_acc = accuracy / total if total > 0 else 0
 
-        # Store training metrics
+        # Append current epoch metrics to overall lists
         all_train_embeddings.extend(train_embeddings)
         all_train_loss.append(avg_train_loss)
         all_train_acc.append(avg_train_acc)
 
-        # Assuming `epoch` is the variable that holds the current epoch number
         print(f'Epoch {epoch + 1} - Average Training Loss: {avg_train_loss:.4f}, Average Training Accuracy: {avg_train_acc:.4f}')
 
-        # Validate the model on the validation set
+        # Validate the model on validation dataset and collect metrics
         val_confusion_matrix, val_embeddings, val_loss, val_acc = testing(model, device, val_loader, criterion)
 
-        # Store validation metrics
+        # Append validation metrics to overall lists
         all_val_embeddings.extend(val_embeddings)
         all_val_loss.append(val_loss)
         all_val_acc.append(val_acc)
 
-        # Print the confusion matrix and normalized confusion matrix for accuracy analysis
+        # Print validation confusion matrix and per-class accuracy
         print("Validation Confusion Matrix:\n", val_confusion_matrix)
-        print("Validation Normalized Confusion Matrix (per-class accuracy):\n", val_confusion_matrix.diag() / val_confusion_matrix.sum(1))
+        print("Validation Normalized Confusion Matrix (per-class accuracy):\n",
+              val_confusion_matrix.diag() / val_confusion_matrix.sum(1))
 
-        # Assuming `epoch` is the variable that holds the current epoch number
         print(f'Epoch {epoch + 1} - Average Validation Loss: {val_loss:.4f}, Average Validation Accuracy: {val_acc:.4f}')
+        print()  # Blank line for readability
 
-        # Print Space
-        print()
-
-        # Step the learning rate scheduler
+        # Step learning rate scheduler based on validation accuracy if scheduler provided
         if scheduler is not None:
             scheduler.step(val_acc)
 
+    # Return all collected training and validation metrics
     return all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc
 
 def testing(model, device, val_loader, criterion):
-    '''
-    Calculates the accuracy and loss on the validation dataset.
+    """
+    Evaluate the model on the validation dataset.
 
     Args:
-        - model: PyTorch model object, the model being evaluated.
-        - val_loader: PyTorch DataLoader object, contains the validation dataset.
-        - criterion: PyTorch criterion object, the loss function.
+        model (torch.nn.Module): The model to evaluate.
+        device (torch.device): Device to run computations on (CPU or GPU).
+        val_loader (DataLoader): DataLoader for the validation dataset.
+        criterion (nn.Module): Loss function to calculate validation loss.
 
     Returns:
-        - val_embeddings: list, the embeddings from the validation dataset.
-        - val_loss: float, the average loss on the validation dataset.
-        - val_acc: float, the average accuracy on the validation dataset.
-    '''
+        tuple:
+            - val_confusion_matrix (torch.Tensor): Confusion matrix for validation predictions.
+            - val_embeddings (list): List of extracted embeddings from validation data.
+            - val_loss (float): Average loss over the validation dataset.
+            - val_acc (float): Average accuracy over the validation dataset.
+    """
 
-    # Set the model to evaluation mode (disables dropout, batch normalization, etc.)
+    # Set model to evaluation mode (disables dropout, batchnorm updates)
     model.eval()
 
-    total = 0           # Total number of samples processed
-    accuracy = 0        # Total correct predictions accumulator
-    test_loss = []      # List to store the loss for each batch/sample
-    val_embeddings = []  # List to store embeddings from the validation dataset
+    total = 0            # Total samples processed
+    accuracy = 0         # Count of correct predictions
+    test_loss = []       # List to store batch-wise losses
+    val_embeddings = []  # List to collect embeddings
 
-    # Initialize an empty confusion matrix to track model predictions vs true labels
+    # Initialize confusion matrix of size [num_classes x num_classes]
     val_confusion_matrix = torch.zeros(num_classes, num_classes)
 
-    # Iterate over validation data in batches
+    # Iterate through batches of validation data
     for batch_num, (feats, labels) in enumerate(val_loader):
+        # Reshape input to match model's expected input shape
+        feats = feats.reshape(-1, 1, feature_dim, feature_dim)
+        feats, labels = feats.to(device), labels.to(device)
 
-        # Reshape features into the required input shape (batch_size, channels, height, width)
-        feats = feats.reshape(-1, 1, feature_dim, feature_dim)  # Reshape the input features to match the model's expected input dimensions
-        feats, labels = feats.to(device), labels.to(device)  # Move the features and labels to the specified device (CPU or GPU)
-
-        # Forward pass: Get the model's predictions (outputs)
+        # Forward pass to get model outputs
         _, outputs = model(feats)
 
-        # Get the predicted labels by finding the index of the maximum output value
+        # Predict labels by taking the class with max softmax score
         _, pred_labels = torch.max(F.softmax(outputs, dim=1), 1)
-        pred_labels = pred_labels.view(-1)  # Flatten the predicted labels tensor
+        pred_labels = pred_labels.view(-1)
 
-        # Update the confusion matrix by comparing true labels with predicted labels
+        # Update confusion matrix counts
         for t, p in zip(labels.view(-1), pred_labels):
             val_confusion_matrix[t.long(), p.long()] += 1
 
-        # Extract embeddings if 'avg_pool' is part of the activation dictionary
+        # Extract embeddings if available in activation dict
         if 'avg_pool' in activation:
-            val_embeddings.append(activation['avg_pool'].detach().cpu().numpy())  # Store embeddings
+            val_embeddings.append(activation['avg_pool'].detach().cpu().numpy())
 
-        # Calculate the loss using the criterion (e.g., cross-entropy loss)
+        # Calculate batch loss
         loss = criterion(outputs, labels.long())
+        test_loss.extend([loss.item()] * feats.size()[0])  # Append loss for each sample
 
-        # Extend the test_loss list by repeating the loss value for each sample in the batch
-        test_loss.extend([loss.item()] * feats.size()[0])
-
-        # Add up the number of correct predictions
+        # Count correct predictions in batch
         accuracy += torch.sum(torch.eq(pred_labels, labels)).item()
-
-        # Update the total number of samples processed
         total += len(labels)
 
-        # Free memory by deleting tensors that are no longer needed
+        # Free memory by deleting unused variables
         del feats, outputs, labels, loss, pred_labels
 
-    # Switch the model back to training mode after evaluation
+    # Switch model back to training mode after evaluation
     model.train()
 
-    # Calculate the average validation loss across all batches
-    val_loss = np.mean(test_loss) if len(test_loss) > 0 else 0 # Use the mean if test_loss is not empty
-
-    # Calculate the overall accuracy on the validation dataset
+    # Compute average validation loss and accuracy
+    val_loss = np.mean(test_loss) if len(test_loss) > 0 else 0
     val_acc = accuracy / total if total > 0 else 0
 
-    # Return the val embeddings, val loss, and val accuracy
     return val_confusion_matrix, val_embeddings, val_loss, val_acc
 
 def create_results_directories():
     """
-    Creates and sets up the necessary directories for storing results, including directories
-    for accuracies and losses, depending on the execution environment (Docker or local).
+    Creates directories for storing results, accuracies, and losses.
 
-    This function:
-    1. Checks the environment to determine paths for the results, accuracies, and losses directories.
-    2. Deletes existing directories (if present) before creating new ones to ensure the directories are fresh.
-    3. Prints the status of the directory creation or deletion process.
-
-    It handles the following directories:
-        - Base results directory
-        - Accuracies directory
-        - Losses directory
-
-    If running in a Docker environment, it uses the `/results` directory, otherwise, it uses the local directory
-    under `/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist`.
+    Behavior:
+    - Uses '/results' if running inside Docker (detected by '/.dockerenv'), otherwise uses a local path.
+    - Deletes existing results directory before creating a fresh one.
+    - Creates subdirectories 'accuracies' and 'losses' inside the results directory.
+    - Prints status messages for each operation.
 
     Returns:
         None
     """
 
-    # Determine the base results directory based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the base results directory for the Docker environment
-        results_dir = '/results'
-    else:
-        # Set the base results directory for local development
-        results_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results'
+    # Determine if running inside Docker by checking for '/.dockerenv'
+    in_docker = os.path.exists('/.dockerenv')
 
-    # Check if the base results directory exists and remove it if it does
-    if os.path.exists(results_dir):
-        # Remove the directory and all its contents if it exists
-        shutil.rmtree(results_dir)
-        print(f"Directory '{results_dir}' has been deleted.")
+    # Set base results directory accordingly
+    base_path = '/results' if in_docker else '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results'
+
+    # Remove existing results directory if it exists
+    if os.path.exists(base_path):
+        shutil.rmtree(base_path)
+        print(f"Directory '{base_path}' has been deleted.")
     else:
-        # Notify if the directory does not exist
-        print(f"Directory '{results_dir}' does not exist.")
+        print(f"Directory '{base_path}' does not exist.")
 
     # Create the base results directory
-    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(base_path, exist_ok=True)
+    print(f"Directory '{base_path}' created successfully." if os.path.exists(base_path) else f"Failed to create '{base_path}'.")
 
-    # Verify the creation of the base results directory and print the status
-    if os.path.exists(results_dir):
-        print(f"Directory '{results_dir}' created successfully.")
-    else:
-        # Notify if the directory creation failed
-        print(f"Failed to create the directory '{results_dir}'.")
-
-    # Determine the accuracies directory based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the accuracies directory for the Docker environment
-        accuracies_dir = '/results/accuracies'
-    else:
-        # Set the accuracies directory for local development
-        accuracies_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results/accuracies'
-
-    # Create the accuracies directory
-    os.makedirs(accuracies_dir, exist_ok=True)
-
-    # Verify the creation of the accuracies directory and print the status
-    if os.path.exists(accuracies_dir):
-        print(f"Directory '{accuracies_dir}' created successfully.")
-    else:
-        # Notify if the directory creation failed
-        print(f"Failed to create the directory '{accuracies_dir}'.")
-
-    # Determine the losses directory based on the execution environment
-    if os.path.exists('/.dockerenv'):
-        # Set the losses directory for the Docker environment
-        losses_dir = '/results/losses'
-    else:
-        # Set the losses directory for local development
-        losses_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results/losses'
-
-    # Create the losses directory
-    os.makedirs(losses_dir, exist_ok=True)
-
-    # Verify the creation of the losses directory and print the status
-    if os.path.exists(losses_dir):
-        print(f"Directory '{losses_dir}' created successfully.")
-    else:
-        # Notify if the directory creation failed
-        print(f"Failed to create the directory '{losses_dir}'.")
+    # Create accuracies and losses subdirectories
+    for subdir in ['accuracies', 'losses']:
+        path = os.path.join(base_path, subdir)
+        os.makedirs(path, exist_ok=True)
+        print(f"Directory '{path}' created successfully." if os.path.exists(path) else f"Failed to create '{path}'.")
 
 def plotAccuracy(mode, accuracies):
     """
-    Plots the accuracy of a model over time.
+    Plot and save the accuracy curve over training or validation time.
 
-    Parameters:
-    mode (str): A string indicating the type of accuracy being plotted (e.g., "Training", "Validation").
-    accuracies (list): A list of accuracy values recorded over time.
+    Args:
+        mode (str): Label describing the accuracy type (e.g., "Training", "Validation").
+        accuracies (list of float): Accuracy values recorded at each time interval (e.g., epoch).
 
-    This function generates a plot that visualizes the accuracy values recorded during training
-    or validation and saves it as a PNG image file at a specified path.
+    Behavior:
+        - Creates a line plot of accuracy over time.
+        - Saves the plot as a PNG file in a designated results directory.
     """
 
-    # Create titles for the graph and plot based on the mode (Training, Validation, etc.)
+    # Title for legend and plot window based on mode
     graph_title = mode + " Accuracies"
     plot_title = mode + " Accuracy Over Time"
 
-    # Define the file path where the plot will be saved
-    save_path = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results/accuracies/" + mode + "_accuracy_plot.png"
+    # Path where the plot image will be saved
+    save_path = f"/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results/accuracies/{mode}_accuracy_plot.png"
 
-    # Generate time intervals corresponding to the number of recorded accuracy values
+    # X-axis values representing time intervals (e.g., epochs)
     time_intervals = list(range(1, len(accuracies) + 1))
 
-    # Set up the figure size for the plot
+    # Set figure size for better visibility
     plt.figure(figsize=(8, 5))
 
-    # Plot the accuracy values over time with markers
+    # Plot accuracy values with markers and line
     plt.plot(time_intervals, accuracies, marker='o', linestyle='-', label=graph_title)
 
-    # Label the x-axis to represent time intervals (epochs or iterations)
+    # Label x-axis (time, epochs, iterations)
     plt.xlabel("Time Intervals")
 
-    # Label the y-axis to represent the accuracy values at each interval
+    # Label y-axis (accuracy values)
     plt.ylabel("Accuracy")
 
-    # Set the plot title to reflect the mode (Training, Validation, etc.)
+    # Set the title of the plot
     plt.title(plot_title)
 
-    # Add a legend to the plot to differentiate from other potential plots
+    # Show legend to clarify plotted data
     plt.legend()
 
-    # Enable grid lines for better visualization of the plot
+    # Enable grid for easier visual interpretation
     plt.grid(True)
 
-    # Save the plot as a PNG file at the specified save path
+    # Save the plot to disk
     plt.savefig(save_path)
 
 def plotLoss(mode, losses):
     """
-    Plots the loss of a model over time.
+    Plot and save the loss curve over training or validation time.
 
-    Parameters:
-    mode (str): A string indicating the type of loss being plotted (e.g., "Training", "Validation").
-    losses (list): A list of loss values recorded over time.
+    Args:
+        mode (str): Label describing the loss type (e.g., "Training", "Validation").
+        losses (list of float): Loss values recorded at each time interval (e.g., epoch).
 
-    This function generates a plot that visualizes the loss values recorded during training
-    or validation, saving it as a PNG image file in the specified path.
+    Behavior:
+        - Creates a line plot of loss over time.
+        - Saves the plot as a PNG file in a designated results directory.
     """
 
-    # Create titles for the graph and plot based on the mode (Training or Validation)
+    # Title for legend and plot window based on mode
     graph_title = mode + " Losses"
     plot_title = mode + " Loss Over Time"
 
-    # Define the file path where the plot will be saved
-    save_path = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results/losses/" + mode + "_loss_plot.png"
+    # Path where the plot image will be saved
+    save_path = f"/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results/losses/{mode}_loss_plot.png"
 
-    # Generate time intervals corresponding to the recorded loss values
+    # X-axis values representing time intervals (e.g., epochs)
     time_intervals = list(range(1, len(losses) + 1))
 
-    # Set up the figure size for the plot
+    # Set figure size for better visibility
     plt.figure(figsize=(8, 5))
 
-    # Plot the loss values over time with markers
+    # Plot loss values with markers and line
     plt.plot(time_intervals, losses, marker='o', linestyle='-', label=graph_title)
 
-    # Label the x-axis as "Time Intervals" to represent the progression of epochs/iterations
+    # Label x-axis (time, epochs, iterations)
     plt.xlabel("Time Intervals")
 
-    # Label the y-axis as "Loss" to represent the loss value at each interval
+    # Label y-axis (loss values)
     plt.ylabel("Loss")
 
-    # Set the plot title to reflect the type of loss being plotted (Training or Validation)
+    # Set the title of the plot
     plt.title(plot_title)
 
-    # Add a legend to differentiate this plot from others if multiple plots are displayed
+    # Show legend to clarify plotted data
     plt.legend()
 
-    # Enable grid for better visualization of the plot
+    # Enable grid for easier visual interpretation
     plt.grid(True)
 
-    # Save the plot as a PNG file at the specified save path
+    # Save the plot to disk
     plt.savefig(save_path)
 
 def main():
+    """
+    Main entry point of the script.
 
-    # Determine the patches directory based on the execution environment
-    # Check if the code is running inside a Docker environment
+    Responsibilities:
+    - Parses command-line argument '--type' to determine which segmentation patches to process
+      (options: 'tumor', 'nuclei', or 'voronoi').
+    - Sets paths to cancerous and non-cancerous patch directories based on environment (Docker or local).
+    - Loads image patch file paths and counts total images from cancerous and non-cancerous directories.
+    - Splits data into training, validation, and test sets and creates DataLoaders.
+    - Loads the model and device (CPU/GPU).
+    - Sets up a forward hook on a specific model layer to capture embeddings.
+    - Obtains loss function, optimizer, and learning rate scheduler.
+    - Trains the model, collecting embeddings, losses, and accuracies.
+    - Tests the model on the test dataset and prints confusion matrices and performance metrics.
+    - Creates directories for saving results.
+    - Plots and saves accuracy and loss curves for training and validation.
+
+    Returns:
+        tuple: Lists of accuracies for training, validation, and testing datasets.
+    """
+
+    # Parse input argument to choose the segmentation patch type to use
+    parser = argparse.ArgumentParser(description="Segmentation input type")
+    parser.add_argument('--type', type=str, choices=["tumor", "nuclei", "voronoi"], required=True)
+    args = parser.parse_args()
+
+    # Determine base paths depending on running inside Docker or locally
     if os.path.exists('/.dockerenv'):
-        cancer_patches_dir = '/patches/Cancerous'  # Set the patches directory for Docker
-        no_cancer_patches_dir = '/patches/NotCancerous'
+        # Docker environment paths for patch directories
+        if args.type == "nuclei":
+            cancer_patches_dir = '/nuclei_patches/Cancerous'
+            no_cancer_patches_dir = '/nuclei_patches/NotCancerous'
+        elif args.type == "tumor":
+            cancer_patches_dir = '/tumor_patches/Cancerous'
+            no_cancer_patches_dir = '/tumor_patches/NotCancerous'
+        elif args.type == "voronoi":
+            cancer_patches_dir = '/voronoi_patches/Cancerous'
+            no_cancer_patches_dir = '/voronoi_patches/NotCancerous'
     else:
-        cancer_patches_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/patches/Cancerous'  # Set the patches directory for local development
-        no_cancer_patches_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/patches/NotCancerous'
+        # Local environment paths
+        base_path = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist'
+        if args.type == "nuclei":
+            cancer_patches_dir = f'{base_path}/nuclei_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/nuclei_patches/NotCancerous'
+        elif args.type == "tumor":
+            cancer_patches_dir = f'{base_path}/tumor_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/tumor_patches/NotCancerous'
+        elif args.type == "voronoi":
+            cancer_patches_dir = f'{base_path}/voronoi_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/voronoi_patches/NotCancerous'
 
-    # Initialize a dictionary to store image patches, categorized by subdirectory
+    # Initialize dictionary and counter to hold image patch paths and total image count
     image_patches = {}
-
-    # Counter to track the total number of image files across all directories
     total_image_count = 0
 
-    # Retrieve image patches and update the total image count for the specified directories
+    # Load image patches from cancerous and non-cancerous directories and update total count
     image_patches, total_image_count = get_patch_files(cancer_patches_dir, image_patches, total_image_count)
     image_patches, total_image_count = get_patch_files(no_cancer_patches_dir, image_patches, total_image_count)
 
-    # Split the image patches into training, validation, and testing datasets according to specified ratios
+    # Split data into train, val, test sets with DataLoaders
     train_loader, val_loader, test_loader = splitting_data(image_patches, total_image_count)
 
-    # Load the model architecture or pre-trained model.
+    # Load model and assign device (CPU or GPU)
     device, model = load_model()
 
-    # Retrieve the hook function for 'avg_pool' layer to capture activations
+    # Get hook function to capture embeddings from 'avg_pool' layer
     hook_function = get_activation('avg_pool', activation)
 
-    # Register the hook to store activations from the specified layer during the forward pass
+    # Register hook on the model's specific layer to capture features during forward pass
     model.features[8].register_forward_hook(hook_function)
 
-    # Call the get_params function to obtain the loss function (criterion), optimizer, and learning rate scheduler for the model.
+    # Setup loss criterion, optimizer, and scheduler for training
     criterion, optimizer, scheduler = get_params(model)
 
-    # Train the model and retrieve the embeddings, training losses, and training accuracies
-    all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc = train(model, device, train_loader, val_loader, criterion, optimizer, scheduler)
+    # Train the model and collect embeddings, loss, accuracy metrics
+    all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc = train(
+        model, device, train_loader, val_loader, criterion, optimizer, scheduler
+    )
 
-    # Run the testing phase of the model on the test dataset
+    # Test the model on the test dataset and collect metrics
     test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc = testing(model, device, test_loader, criterion)
 
-    # Print the confusion matrix for the testing phase
+    # Print confusion matrix and normalized per-class accuracy
     print("Testing Confusion Matrix:\n", test_confusion_matrix)
-
-    # Print the normalized confusion matrix to evaluate per-class accuracy
-    # Normalization is done by dividing the diagonal by the sum of each row
     print("Testing Normalized Confusion Matrix (per-class accuracy):\n",
           test_confusion_matrix.diag() / test_confusion_matrix.sum(1))
 
-    # Print the average testing loss and accuracy metrics
+    # Print average testing loss and accuracy
     print(f'Average Testing Loss: {all_test_loss:.4f}, Average Testing Accuracy: {all_test_acc:.4f}')
 
-    # Create the necessary directories for saving results, including accuracies and losses
+    # Create directories to save results, accuracies, and losses
     create_results_directories()
 
-    # Plot and save the accuracy values for the training, validation, and testing datasets
+    # Plot and save accuracy curves for training and validation
     plotAccuracy("training", all_train_acc)
     plotAccuracy("validation", all_val_acc)
 
-    # Plot and save the loss values for the training, validation, and testing datasets
+    # Plot and save loss curves for training and validation
     plotLoss("training", all_train_loss)
     plotLoss("validation", all_val_loss)
 
-    return all_train_acc, all_val_acc, all_test_acc  # Return lists of training, validation, and test accuracies
+    # Return accuracy lists for further use if needed
+    return all_train_acc, all_val_acc, all_test_acc
 
-# Entry point for the script
+# Script entry point
 if __name__ == "__main__":
     main()
-
-# Doubts
-  # 1) What size to do images because the layer size of resnet34 is 512? Images are blurry with size 512.
-  # 2) If I have to look for more data what is recommended: Kaggle, NBIA Data Retriever, Pittsburgh Supercomputer?
