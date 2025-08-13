@@ -546,7 +546,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.9, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=2, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=20, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Trains the model over multiple epochs, tracking training and validation metrics.
@@ -993,9 +993,10 @@ def main():
     plotLoss("training", all_train_loss)
     plotLoss("validation", all_val_loss)
 
-    # Return accuracy lists for further use if needed
-    return all_train_acc, all_val_acc, all_test_acc
+    # Return final test accuracy for further use
+    print(all_test_acc)
 
-# Script entry point
 if __name__ == "__main__":
     main()
+
+# genAI approach
