@@ -1,5 +1,6 @@
 # Import packages
 import os
+import time
 import copy
 import torch
 import random
@@ -546,7 +547,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.9, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=20, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=1, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Trains the model over multiple epochs, tracking training and validation metrics.
@@ -913,6 +914,9 @@ def main():
         tuple: Lists of accuracies for training, validation, and testing datasets.
     """
 
+    # Record the start time of the training run to measure total runtime
+    start_time = time.time()
+
     # Parse input argument to choose the segmentation patch type to use
     parser = argparse.ArgumentParser(description="Segmentation input type")
     parser.add_argument('--type', type=str, choices=["tumor", "nuclei", "voronoi"], required=True)
@@ -966,6 +970,15 @@ def main():
     # Setup loss criterion, optimizer, and scheduler for training
     criterion, optimizer, scheduler = get_params(model)
 
+    # Record time immediately before training starts
+    mid_time1 = time.time()
+
+    # Calculate the time spent in setup/preprocessing
+    setup_time = mid_time1 - start_time
+
+    # Print the setup/preprocessing time in seconds
+    print("Time Before Training: {:.2f} seconds".format(setup_time))
+
     # Train the model and collect embeddings, loss, accuracy metrics
     all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc = train(
         model, device, train_loader, val_loader, criterion, optimizer, scheduler
@@ -973,6 +986,15 @@ def main():
 
     # Test the model on the test dataset and collect metrics
     test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc = testing(model, device, test_loader, criterion)
+
+    # Record time immediately after training finishes
+    mid_time2 = time.time()
+
+    # Calculate the total training time
+    training_time = mid_time2 - mid_time1
+
+    # Print the training time in seconds
+    print("Training Time: {:.2f} seconds".format(training_time))
 
     # Print confusion matrix and normalized per-class accuracy
     print("Testing Confusion Matrix:\n", test_confusion_matrix)
@@ -993,10 +1015,26 @@ def main():
     plotLoss("training", all_train_loss)
     plotLoss("validation", all_val_loss)
 
+    # Record the end time immediately after metrics calculation
+    end_time = time.time()
+
+    # Calculate time spent on metrics calculation
+    metrics_time = end_time - mid_time2
+    print("Time Spent on Metrics Calculation: {:.2f} seconds".format(metrics_time))
+
+    # Calculate total runtime of the entire script
+    total_time = end_time - start_time
+    print("Total Script Runtime: {:.2f} seconds".format(total_time))
+
     # Return final test accuracy for further use
     print(all_test_acc)
 
 if __name__ == "__main__":
     main()
 
-# genAI approach
+# Regular Images Time: 234.62 seconds (1 epoch), 473.27 seconds (2 epochs)
+# Voronoi Images Time: 245 seconds (1 epoch), 490.51 seconds (2 epochs)
+
+# Time for a single model run: 4 mins * 30 epochs = 2 hrs
+# Time for a single simulation: 2 hrs * 2 = 4 hrs
+# Time of 20 simulations: 4 hrs * 20 = 80 hrs
