@@ -1,6 +1,7 @@
 # Import necessary packages
 import json
 import argparse
+import numpy as np
 from scipy.stats import wilcoxon
 
 def main():
@@ -19,6 +20,13 @@ def main():
     # Convert JSON strings to Python lists of floats for statistical testing
     original = list(map(float, json.loads(args.original)))
     voronoi = list(map(float, json.loads(args.voronoi)))
+
+    # Compute and print median for both datasets
+    original_median = np.median(original)
+    voronoi_median = np.median(voronoi)
+    print(f"Original median accuracy: {original_median}")
+    print(f"Voronoi median accuracy: {voronoi_median}")
+    print()
 
     # Perform Wilcoxon signed-rank test to compare paired samples
     stat, p_value = wilcoxon(original, voronoi)
