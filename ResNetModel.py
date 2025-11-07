@@ -28,6 +28,18 @@ from sklearn.metrics import confusion_matrix
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data.sampler import SubsetRandomSampler
 
+# 1. Set seeds
+# seed = 30
+# random.seed(seed)
+# np.random.seed(seed)
+# torch.manual_seed(seed)
+# torch.cuda.manual_seed(seed)
+# torch.cuda.manual_seed_all(seed)  # if using multi-GPU
+
+# 2. Make cudnn deterministic
+# torch.backends.cudnn.deterministic = True
+# torch.backends.cudnn.benchmark = False
+
 # Define the global variables for feature dimension, number of classes, and activation
 global feature_dim
 global num_classes
@@ -131,7 +143,7 @@ def create_data_directories():
     if os.path.exists('/.dockerenv'):
         data_dir = '/data'  # Docker environment base directory
     else:
-        data_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/data'  # Local environment
+        data_dir = '/ocean/projects/bio240001p/arpitha/data'  # Local environment
 
     # Delete existing base directory if it exists to start fresh
     if os.path.exists(data_dir):
@@ -293,12 +305,12 @@ def sampler(dataset, count, size=1000):
 
     # Create WeightedRandomSampler with replacement to oversample minority classes
     weighted_sampler = torch.utils.data.sampler.WeightedRandomSampler(
-        sample_weights, size, replacement=True
+        sample_weights, len(dataset), replacement=True
     )
 
     return weighted_sampler
 
-def splitting_data(image_patches, total_image_count, train_ratio=0.60, val_ratio=0.20, test_ratio=0.20, batch_size=32):
+def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=32):
     """
     Split image patches into training, validation, and test sets, then create DataLoaders.
 
@@ -358,6 +370,8 @@ def splitting_data(image_patches, total_image_count, train_ratio=0.60, val_ratio
             cur_test_count += count
             test_dirs.append(image_path)
 
+    print("Current counts -> Train: {}, Validation: {}, Test: {}".format(cur_train_count, cur_val_count, cur_test_count))
+
     # Create the directory structure again if needed (safe call)
     create_data_directories()
 
@@ -381,8 +395,8 @@ def splitting_data(image_patches, total_image_count, train_ratio=0.60, val_ratio
 
     # Create DataLoaders with batch size and sampler (train) or shuffle (val/test)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
     return train_loader, val_loader, test_loader
 
@@ -454,7 +468,7 @@ def load_model():
     and prepares it for training or inference with a custom final fully connected layer.
 
     Steps:
-    1. Load ResNet18 pretrained on ImageNet.
+    1. Load ResNet34 pretrained on ImageNet.
     2. Replace first conv layer to accept single-channel grayscale images.
     3. Replace average pooling with adaptive average pooling (output size 1x1).
     4. Modify final fully connected layer to output the desired number of classes.
@@ -466,8 +480,8 @@ def load_model():
         model (torch.nn.Module): The modified ResNet18 model wrapped with ModelEmbedding.
     """
 
-    # Load pretrained ResNet18 model
-    model = models.resnet18(pretrained=True)
+    # Load pretrained ResNet34 model
+    model = models.resnet34(pretrained=True)
 
     # Modify first conv layer for grayscale input (1 channel)
     model.conv1 = nn.Conv2d(
@@ -491,9 +505,14 @@ def load_model():
     # Select device: GPU if available, else CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Transfer model to the chosen device
-    model.to(device)
+    # Wrap for multi-GPU if more than 1 GPU available
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
 
+    # Send model to GPU(s)
+    model = model.to(device)
+
+    # Return the device and the model now on GPU(s) so inputs can be moved to the same device for training/inference
     return device, model
 
 def get_activation(name, activation):
@@ -516,7 +535,7 @@ def get_activation(name, activation):
 
     return hook
 
-def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.9, factor=0.5, patience=3):
+def get_params(model, learningRate=1e-4, weight_decay=1e-5, momentum=0.70, factor=0.5, patience=3):
     """
     Initializes and returns the loss function, optimizer, and learning rate scheduler for model training.
 
@@ -547,7 +566,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.9, factor
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=1, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=100, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Trains the model over multiple epochs, tracking training and validation metrics.
@@ -643,8 +662,15 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
 
             # Print average loss every 8 batches for monitoring
             if (batch_num + 1) % 8 == 0:
-                print(f'Training Epoch: {epoch + 1}\tBatch: {batch_num + 1}\tAvg-Loss: {avg_loss / 8:.4f}')
-                avg_loss = 0.0  # Reset average loss after printing
+              print(f'Training Epoch: {epoch + 1}\tBatch: {batch_num + 1}\tAvg-Loss: {avg_loss / 8:.4f}')
+
+              # Print GPU usage info
+              # print(f"GPU Memory Allocated (MB): {torch.cuda.memory_allocated()/1024**2:.2f}")
+              # print(f"GPU Memory Reserved  (MB): {torch.cuda.memory_reserved()/1024**2:.2f}")
+              # print(f"CUDA current device: {torch.cuda.current_device()}")
+              # print(f"GPU name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+
+              avg_loss = 0.0  # Reset average loss after printing
 
             # Clear unused GPU memory to prevent leaks
             torch.cuda.empty_cache()
@@ -686,7 +712,7 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
 
         # Step learning rate scheduler based on validation accuracy if scheduler provided
         if scheduler is not None:
-            scheduler.step(val_acc)
+            scheduler.step(val_loss)
 
     # Return all collected training and validation metrics
     return all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc
@@ -779,7 +805,7 @@ def create_results_directories():
     in_docker = os.path.exists('/.dockerenv')
 
     # Set base results directory accordingly
-    base_path = '/results' if in_docker else '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results'
+    base_path = '/results' if in_docker else '/ocean/projects/bio240001p/arpitha/results'
 
     # Remove existing results directory if it exists
     if os.path.exists(base_path):
@@ -816,7 +842,7 @@ def plotAccuracy(mode, accuracies):
     plot_title = mode + " Accuracy Over Time"
 
     # Path where the plot image will be saved
-    save_path = f"/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results/accuracies/{mode}_accuracy_plot.png"
+    save_path = f"/ocean/projects/bio240001p/arpitha/results/accuracies/{mode}_accuracy_plot.png"
 
     # X-axis values representing time intervals (e.g., epochs)
     time_intervals = list(range(1, len(accuracies) + 1))
@@ -863,7 +889,7 @@ def plotLoss(mode, losses):
     plot_title = mode + " Loss Over Time"
 
     # Path where the plot image will be saved
-    save_path = f"/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/results/losses/{mode}_loss_plot.png"
+    save_path = f"/ocean/projects/bio240001p/arpitha/results/losses/{mode}_loss_plot.png"
 
     # X-axis values representing time intervals (e.g., epochs)
     time_intervals = list(range(1, len(losses) + 1))
@@ -936,7 +962,7 @@ def main():
             no_cancer_patches_dir = '/voronoi_patches/NotCancerous'
     else:
         # Local environment paths
-        base_path = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist'
+        base_path = '/ocean/projects/bio240001p/arpitha'
         if args.type == "nuclei":
             cancer_patches_dir = f'{base_path}/nuclei_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/nuclei_patches/NotCancerous'
@@ -961,11 +987,30 @@ def main():
     # Load model and assign device (CPU or GPU)
     device, model = load_model()
 
+    # Print the primary device where the model is loaded
+    print(f"Model loaded on device: {device}")
+
+    # Print the total number of GPUs available to PyTorch
+    print(f"Number of GPUs available: {torch.cuda.device_count()}")
+
+    # If multiple GPUs are available, print details about each one
+    if torch.cuda.device_count() > 1:
+     print("GPU Details:")
+     # Loop through each GPU and print its index and name
+     for i in range(torch.cuda.device_count()):
+        print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+
     # Get hook function to capture embeddings from 'avg_pool' layer
     hook_function = get_activation('avg_pool', activation)
 
     # Register hook on the model's specific layer to capture features during forward pass
-    model.features[8].register_forward_hook(hook_function)
+    # model.features[8].register_forward_hook(hook_function)
+
+    # Access the underlying model when using DataParallel
+    if torch.cuda.device_count() > 1:
+      model.module.features[8].register_forward_hook(hook_function)
+    else:
+      model.features[8].register_forward_hook(hook_function)
 
     # Setup loss criterion, optimizer, and scheduler for training
     criterion, optimizer, scheduler = get_params(model)
@@ -1031,10 +1076,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# Regular Images Time: 234.62 seconds (1 epoch), 473.27 seconds (2 epochs)
-# Voronoi Images Time: 245 seconds (1 epoch), 490.51 seconds (2 epochs)
-
-# Time for a single model run: 4 mins * 30 epochs = 2 hrs
-# Time for a single simulation: 2 hrs * 2 = 4 hrs
-# Time of 20 simulations: 4 hrs * 20 = 80 hrs
