@@ -423,7 +423,7 @@ def main():
     # 3. Generate 5 synthetic cancerous images using the trained model
     #    - Uses reverse diffusion starting from Gaussian noise
     #    - Saves generated images in the patch_dir under the "Cancerous" folder
-    generate_synthetic(5, "Cancerous", patch_dir)
+    generate_synthetic(21, "Cancerous", patch_dir)
 
     # -----------------------------------------------------------------
     # Repeat the process for non-cancerous dataset
@@ -437,7 +437,7 @@ def main():
     train_model(no_cancer_loader)
 
     # 3. Generate 5 synthetic non-cancerous images and save them in patch_dir under "NotCancerous"
-    generate_synthetic(5, "NotCancerous", patch_dir)
+    generate_synthetic(13, "NotCancerous", patch_dir)
 
 if __name__ == "__main__":
     main()
