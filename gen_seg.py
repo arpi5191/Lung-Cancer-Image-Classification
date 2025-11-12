@@ -222,6 +222,7 @@ def train_model(dataloader, num_epochs=1):
     # Loop over epochs
     for epoch in range(num_epochs):
         for batch_idx, (indices, images) in enumerate(dataloader):
+            print(images[0].shape)
             # Move image batch to GPU/CPU
             images = images.to(device)
 
@@ -262,6 +263,109 @@ def train_model(dataloader, num_epochs=1):
 
         # Print epoch loss for monitoring training progress
         print(f"Epoch {epoch+1}/{num_epochs} completed, loss={loss.item():.4f}")
+
+def generate_synthetic(num_images: int, classification, patch_dir):
+    """
+    Generate synthetic images using a trained Latent Diffusion Model (LDM).
+
+    This function generates new images by:
+    1. Sampling random Gaussian noise in the latent space.
+    2. Iteratively denoising it using a trained UNet (reverse diffusion).
+    3. Decoding the final latent into pixel space using the VAE.
+    4. Converting to grayscale, upscaling to target resolution, and saving as TIFF.
+
+    Args:
+        num_images (int): Number of synthetic images to generate.
+
+    Note:
+        The models (vae, unet, scheduler, device) must be
+        initialized globally beforehand via load_model().
+    """
+
+    # -------------------------------------------------------------------------
+    # OPTION 1: Generate at 256x256 then upscale to higher resolution (FAST)
+    # -------------------------------------------------------------------------
+    img_size = 256       # Base size for generating images
+    target_size = 2048   # Final desired size for output images
+
+    # -------------------------------------------------------------------------
+    # Put models in evaluation mode to disable dropout/batch norm updates
+    # -------------------------------------------------------------------------
+    vae.eval()
+    unet.eval()
+
+    # -------------------------------------------------------------------------
+    # Disable gradient tracking to save memory and computation
+    # -------------------------------------------------------------------------
+    with torch.no_grad():
+        for i in range(num_images):
+            print(f"Generating image {i+1}/{num_images}...")
+
+            # -----------------------------------------------------------------
+            # 1. Sample random Gaussian noise in latent space
+            # -----------------------------------------------------------------
+            # Latents are small (img_size//8 = 32) because VAE compresses image 8x
+            # Latent shape: (batch_size=1, channels=4, height=32, width=32)
+            latents = torch.randn((1, 4, img_size//8, img_size//8)).to(device)
+
+            # -----------------------------------------------------------------
+            # 2. Initialize the diffusion scheduler for inference
+            # -----------------------------------------------------------------
+            # Sets up the noise schedule and timesteps for reverse diffusion
+            scheduler.set_timesteps(10)  # fewer timesteps → faster generation
+
+            # -----------------------------------------------------------------
+            # 3. Iterative denoising (reverse diffusion) process
+            # -----------------------------------------------------------------
+            for t in scheduler.timesteps:
+                # Scale the latents appropriately before passing to UNet
+                latent_model_input = scheduler.scale_model_input(latents, t)
+
+                # UNet predicts noise at this timestep
+                noise_pred = unet(latent_model_input, t).sample
+
+                # Update latent by removing predicted noise
+                latents = scheduler.step(noise_pred, t, latents).prev_sample
+
+            # -----------------------------------------------------------------
+            # 4. Decode latent into pixel space using VAE
+            # -----------------------------------------------------------------
+            # Multiply by scaling factor used in Stable Diffusion
+            # Decoded image shape: (batch=1, channels=3, H=256, W=256)
+            image = vae.decode(latents / 0.18215).sample
+
+            # -----------------------------------------------------------------
+            # 5. Normalize pixel values from [-1, 1] → [0, 1]
+            # -----------------------------------------------------------------
+            # Clamp ensures no values go outside [-1,1], then rescale
+            image = (image.clamp(-1, 1) + 1) / 2
+
+            # -----------------------------------------------------------------
+            # 6. Convert to grayscale, upscale, and save as TIFF
+            # -----------------------------------------------------------------
+            # Remove batch dimension and move tensor to CPU
+            image_np = image.squeeze(0).cpu().numpy()  # Shape: (3, H, W)
+
+            # Convert RGB to grayscale by averaging channels
+            grayscale = image_np.mean(axis=0)  # Shape: (H, W)
+
+            # Upscale to target_size using cubic interpolation
+            if grayscale.shape != (target_size, target_size):
+                print(f"Upscaling from {grayscale.shape} to ({target_size}, {target_size})...")
+                zoom_factor = target_size / grayscale.shape[0]  # scaling factor
+                grayscale = zoom(grayscale, zoom_factor, order=3)  # order=3 = cubic interpolation
+
+            # Scale to 0-255 and convert to uint8 for TIFF saving
+            grayscale = (grayscale * 255).astype(np.uint8)
+
+            # Save the image as TIFF
+            output_path = os.path.join(patch_dir, classification, f"generated_image_{i}.tif")
+            tifffile.imwrite(output_path, grayscale)
+            print(f"Saved {output_path} with shape {grayscale.shape}")
+
+            # Clear GPU cache to prevent memory buildup if using CUDA
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 def main():
     """
@@ -305,9 +409,35 @@ def main():
     print(f"Cancerous dataset size: {len(cancer_loader.dataset)}")
     print(f"NotCancerous dataset size: {len(no_cancer_loader.dataset)}")
 
-    load_model()  # Initialize VAE, UNet, and scheduler
+    # -----------------------------------------------------------------
+    # Load models, train on cancerous dataset, and generate synthetic images
+    # -----------------------------------------------------------------
 
+    # 1. Initialize the VAE, UNet, and scheduler models for diffusion
+    load_model()
+
+    # 2. Train the UNet component of the latent diffusion model on the cancerous images
+    #    This step updates the UNet weights to better predict noise patterns in cancerous tumors
     train_model(cancer_loader)
+
+    # 3. Generate 5 synthetic cancerous images using the trained model
+    #    - Uses reverse diffusion starting from Gaussian noise
+    #    - Saves generated images in the patch_dir under the "Cancerous" folder
+    generate_synthetic(5, "Cancerous", patch_dir)
+
+    # -----------------------------------------------------------------
+    # Repeat the process for non-cancerous dataset
+    # -----------------------------------------------------------------
+
+    # 1. Re-initialize the models to ensure clean weights (optional but safer)
+    load_model()
+
+    # 2. Train the UNet on non-cancerous images
+    #    Updates the model to learn noise patterns and structures typical of healthy tissue
+    train_model(no_cancer_loader)
+
+    # 3. Generate 5 synthetic non-cancerous images and save them in patch_dir under "NotCancerous"
+    generate_synthetic(5, "NotCancerous", patch_dir)
 
 if __name__ == "__main__":
     main()
