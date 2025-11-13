@@ -91,6 +91,9 @@ def train_model(pipe, device, patch_dir, classifications, prompts, negative_prom
             # Upscale to 2048x2048 using high-quality Lanczos resampling
             image = image.resize((2048, 2048), Image.Resampling.LANCZOS)
 
+            # Convert to true grayscale
+            image = image.convert("L")
+
             # Save the image in the class-specific folder
             class_dir = os.path.join(patch_dir, classifications[class_idx])
             filepath = os.path.join(class_dir, f"prompt_image_{img_idx}.tiff")
@@ -152,7 +155,6 @@ def main():
 
     # Generate synthetic images
     train_model(pipe, device, patch_dir, classifications, prompts, negative_prompts, num_images)
-
 
 if __name__ == "__main__":
     main()
