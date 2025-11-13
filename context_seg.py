@@ -7,6 +7,13 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from diffusers import StableDiffusionPipeline, ControlNetModel, StableDiffusionControlNetPipeline
 
+# SET CACHE DIRECTORIES TO PROJECT SPACE (NOT HOME DIRECTORY)
+# This prevents disk quota errors
+os.environ['HF_HOME'] = '/ocean/projects/bio240001p/arpitha/hf_cache'
+os.environ['TRANSFORMERS_CACHE'] = '/ocean/projects/bio240001p/arpitha/hf_cache'
+os.environ['HF_DATASETS_CACHE'] = '/ocean/projects/bio240001p/arpitha/hf_cache'
+os.environ['TORCH_HOME'] = '/ocean/projects/bio240001p/arpitha/torch_cache'
+
 class SingleClassDataset(torch.utils.data.Dataset):
     """
     Custom PyTorch Dataset for loading images of a single class (e.g., Cancerous or NotCancerous).
