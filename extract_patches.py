@@ -31,7 +31,7 @@ def load_channel(tif_path):
 # ========================================================
 # Function: segment_images
 # ========================================================
-def segment_images(tif_paths, output_patches_dir, classification, downsample_interval):
+def segment_images(tif_paths, output_patches_dir, classification):
     """
     Segment images and extract horizontal patches from each.
 
@@ -50,12 +50,13 @@ def segment_images(tif_paths, output_patches_dir, classification, downsample_int
 
     for tif_path in tif_paths:
         # Extract base filename without extension safely
-        basename = tif_path.stem
+        # Remove the '_brightened_image' suffix to get the original basename
+        basename = tif_path.stem.replace('_brightened_image', '')
         print(f"Processing: {basename}")
 
         # Load and downsample the image
         img = load_channel(tif_path)
-        img = img[::downsample_interval, ::downsample_interval]
+        img = cv2.resize(img, (2048, 2048), interpolation=cv2.INTER_LINEAR)
 
         # Extract and save patches
         num_patches += extract_patches(img, output_filepath, basename)
@@ -87,7 +88,7 @@ def extract_patches(image, output_filepath, basename, save_size=512):
     os.makedirs(patch_filepath, exist_ok=True)
 
     # Patch extraction parameters
-    patch_size, stride = 256, 256
+    patch_size, stride = 512, 512
     h, w = image.shape[:2]
     label = 1  # Patch index
 
@@ -99,7 +100,7 @@ def extract_patches(image, output_filepath, basename, save_size=512):
         # Save patch as .tif
         patch_filename = f'{basename}_label{label}.tif'
         full_patch_path = os.path.join(patch_filepath, patch_filename)
-        cv2.imwrite(full_patch_path, patch)
+        tifffile.imwrite(full_patch_path, patch)
 
         label += 1
 
@@ -129,21 +130,13 @@ def main():
         help="Segmentation type to generate patches for (tumor/voronoi/diffusion/prompt/context)."
     )
 
-    # Downsampling factor argument
-    parser.add_argument(
-        '--d', '--downsample-interval',
-        type=int,
-        required=True,
-        help="Downsample factor (e.g., 4 = keep every 4th pixel)."
-    )
-
     args = parser.parse_args()
 
     # Determine input/output directories
     if os.path.exists('/.dockerenv'):
         # Docker paths
         input_output_map = {
-            "tumor": ("/tif", "tumor_patches"),
+            "tumor": ("/tumor_tif", "tumor_patches"),
             "voronoi": ("/voronoi_tif", "voronoi_patches"),
             "diffusion": ("/diffusion_tif", "diffusion_patches"),
             "prompt": ("/prompt_tif", "prompt_patches"),
@@ -154,7 +147,7 @@ def main():
         # Local paths
         base_path = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist"
         input_output_map = {
-            "tumor": (f"{base_path}/tif", f"{base_path}/tumor_patches"),
+            "tumor": (f"{base_path}/tumor_tif", f"{base_path}/tumor_patches"),
             "voronoi": (f"{base_path}/voronoi_tif", f"{base_path}/voronoi_patches"),
             "diffusion": (f"{base_path}/diffusion_tif", f"{base_path}/diffusion_patches"),
             "prompt": (f"{base_path}/prompt_tif", f"{base_path}/prompt_patches"),
@@ -166,18 +159,34 @@ def main():
     input_cancer_patches_dir = os.path.join(input_patches_dir, "Cancerous")
     input_not_cancer_patches_dir = os.path.join(input_patches_dir, "NotCancerous")
 
-    # Verify that .tif files exist in each folder
+    # Verify that .tif files exist in each folder (search recursively in subdirectories)
     cancer_tif_path_obj = pathlib.Path(input_cancer_patches_dir)
     if not cancer_tif_path_obj.exists():
         raise FileNotFoundError(f".tif directory '{input_cancer_patches_dir}' does not exist.")
-    cancer_tif_paths = list(cancer_tif_path_obj.glob('*.tif'))
+
+    # Select glob pattern based on segmentation type
+    if args.type == "tumor":
+        cancer_tif_paths = list(cancer_tif_path_obj.glob('**/*_brightened_image.tif'))
+    elif args.type == "voronoi":
+        cancer_tif_paths = list(cancer_tif_path_obj.glob('**/*_voronoi_diagram.tif'))
+    else:
+        cancer_tif_paths = list(cancer_tif_path_obj.glob('**/*.tif'))
+
     if not cancer_tif_paths:
         raise FileNotFoundError(f"No .tif files found in '{input_cancer_patches_dir}'.")
 
     no_cancer_tif_path_obj = pathlib.Path(input_not_cancer_patches_dir)
     if not no_cancer_tif_path_obj.exists():
         raise FileNotFoundError(f".tif directory '{input_not_cancer_patches_dir}' does not exist.")
-    no_cancer_tif_paths = list(no_cancer_tif_path_obj.glob('*.tif'))
+
+    # Select glob pattern based on segmentation type
+    if args.type == "tumor":
+        no_cancer_tif_paths = list(no_cancer_tif_path_obj.glob('**/*_brightened_image.tif'))
+    elif args.type == "voronoi":
+        no_cancer_tif_paths = list(no_cancer_tif_path_obj.glob('**/*_voronoi_diagram.tif'))
+    else:
+        no_cancer_tif_paths = list(no_cancer_tif_path_obj.glob('**/*.tif'))
+
     if not no_cancer_tif_paths:
         raise FileNotFoundError(f"No .tif files found in '{input_not_cancer_patches_dir}'.")
 
@@ -198,8 +207,8 @@ def main():
         print(f"Directory '{path}' was created successfully.")
 
     # Process and extract patches
-    segment_images(cancer_tif_paths, output_patches_dir, "Cancerous", args.d)
-    segment_images(no_cancer_tif_paths, output_patches_dir, "NotCancerous", args.d)
+    segment_images(cancer_tif_paths, output_patches_dir, "Cancerous")
+    segment_images(no_cancer_tif_paths, output_patches_dir, "NotCancerous")
 
 
 if __name__ == "__main__":

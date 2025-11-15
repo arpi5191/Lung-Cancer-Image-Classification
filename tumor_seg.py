@@ -1,4 +1,4 @@
-# Import necessary libraries
+# Import packages
 import os
 import cv2
 import shutil
@@ -6,142 +6,130 @@ import pathlib
 import tifffile
 import argparse
 import numpy as np
-from scipy.ndimage import zoom
-from csbdeep.utils import normalize
 import skimage.exposure as exposure
-from stardist.models import StarDist2D  # Not used here but typically required if using StarDist models
 
-def load_channel(tif_path):
-    """
-    Loads the specified channel (assumed to be grayscale) from a multi-channel TIFF file.
+def load_channel(tif_path, channel_idx):
+    '''
+    Load the specified channel from a multi-channel TIFF file as a 2D numpy array.
 
     Args:
-        tif_path (str): The file path to the TIFF image.
+        tif_path (str): Path to the multi-channel TIFF image.
+        channel_idx (int): 0-based index of the desired channel (e.g., DAPI often index 0).
 
     Returns:
-        np.ndarray: The loaded and intensity-rescaled grayscale image as a 2D NumPy array.
-    """
-    # Read the image (assumed to be grayscale or single-channel)
+        np.ndarray: 2D array of the selected channel image, intensity scaled to 0-255 as uint8.
+    '''
+
+    # Read the entire multi-channel TIFF image (all channels)
     channel = tifffile.imread(tif_path)
 
-    # Rescale intensity values to 0–255 (8-bit), which improves contrast and uniformity
+    # Rescale the pixel intensity values of the selected channel to range 0-255 and convert to uint8
     return exposure.rescale_intensity(channel, in_range='image', out_range=(0, 255)).astype(np.uint8)
 
-def segment_images(tif_paths, classification, downsample_interval):
+def preprocess_images(tif_paths, classification, intermediates_dir, final_dir, dapi_channel_idx, downsample_interval):
     """
-    Segments nuclei from TIFF images using a pre-trained StarDist model and extracts patches.
+    Preprocesses a list of TIFF images and saves the results.
 
-    Args:
-        tif_paths (List[Path]): List of paths to input .tif images.
-        classification (str): Class label (e.g., 'Cancerous' or 'NotCancerous') used in output directory naming.
-        downsample_interval (int): Downsampling factor (e.g., 4 means keep every 4th pixel).
+    Parameters:
+    - tif_paths (list of Path): List of file paths to multi-channel TIFF images.
+    - classification (str): Classification label used to organize output directories.
+    - intermediates_dir (str): Directory path to save intermediate preprocessing steps.
+    - final_dir (str): Directory path to save final preprocessed results.
+    - dapi_channel_idx (int): Index of the DAPI channel in the TIFF images.
+    - downsample_interval (int): Factor by which to downsample the input images for processing.
 
-    Returns:
-        None
+    Process:
+    - Load DAPI channel images
+    - Downsample images
+    - Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    - Apply Gaussian blur
+    - Apply morphological closing
+    - Save intermediate and final preprocessed images
     """
-    num_patches = 0  # Track total patches across all images
 
     for tif_path in tif_paths:
-        # Extract filename without extension
-        basename = tif_path.name.rstrip('.tif')
 
-        # Load image and downsample by skipping pixels
-        img = load_channel(tif_path)
-        img = img[::downsample_interval, ::downsample_interval]
+        # Prepare output directory paths
+        basename = tif_path.stem  # Get the filename without extension to use as subfolder name
+        intermediates_output_dir = os.path.join(intermediates_dir, classification, basename)
+        final_output_dir = os.path.join(final_dir, classification, basename)
 
-        # Extract and save image patches
-        num_patches += extract_patches(img, classification, basename)
+        # Create the directories if they don't already exist
+        os.makedirs(intermediates_output_dir, exist_ok=True)
+        os.makedirs(final_output_dir, exist_ok=True)
 
-        # Save the processed image (after downsampling) as a .npy array
-        print(f'Output Path: {seg_dir}/{basename}_seg.npy')
-        np.save(f'{seg_dir}/{basename}_seg.npy', img)
-        print()
+        # Check and confirm directory creation
+        if os.path.exists(intermediates_output_dir):
+            print(f"Directory '{intermediates_output_dir}' created successfully.")
+        else:
+            print(f"Failed to create the directory '{intermediates_output_dir}'.")
 
-    # Print summary of processing
-    print("Classification:", classification)
-    print("Number of Patches:", num_patches)
-    print()
+        if os.path.exists(final_output_dir):
+            print(f"Directory '{final_output_dir}' created successfully.")
+        else:
+            print(f"Failed to create the directory '{final_output_dir}'.")
 
-def extract_patches(image, classification, basename, save_size=512):
-    """
-    Extracts horizontal image patches and saves them as .tif files.
+        # Load and downsample DAPI channel image
+        original_img = load_channel(tif_path, dapi_channel_idx)
+        original_img = original_img[::downsample_interval, ::downsample_interval]
 
-    Args:
-        image (np.ndarray): 2D array representing the grayscale image.
-        classification (str): Label used for output directory ('Cancerous' or 'NotCancerous').
-        basename (str): Name of the original image (used for naming patches).
-        save_size (int, optional): Size of the saved patch in pixels (default: 512).
+        # Save original downsampled image (intermediate only)
+        original_img_path = os.path.join(intermediates_output_dir, f"{basename}_original_image.png")
+        cv2.imwrite(original_img_path, original_img)
+        print(f"Original image saved at {original_img_path}")
 
-    Returns:
-        int: Number of patches saved.
-    """
+        # Apply Contrast Limited Adaptive Histogram Equalization (CLAHE)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        if original_img.dtype != np.uint8:
+            original_img = ((original_img - original_img.min()) / (original_img.max() - original_img.min()) * 255).astype(np.uint8)
+        preprocessed_img = clahe.apply(original_img)
 
-    # Set the output path depending on whether it's running in Docker
-    if os.path.exists('/.dockerenv'):
-        patch_output_dir = f'/patches/{classification}/{basename}'
-    else:
-        patch_output_dir = f'/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_patches/{classification}/{basename}'
+        # Smooth image with Gaussian Blur to reduce noise
+        preprocessed_img = cv2.GaussianBlur(preprocessed_img, (3, 3), 0)
 
-    # Create directory for saving patches
-    os.makedirs(patch_output_dir, exist_ok=True)
+        # Apply morphological closing to reduce noise
+        kernel = np.ones((7, 7), np.uint8)
+        preprocessed_img = cv2.morphologyEx(preprocessed_img, cv2.MORPH_CLOSE, kernel)
 
-    # Confirm directory creation
-    if os.path.exists(patch_output_dir):
-        print(f"Directory '{patch_output_dir}' created successfully.")
-    else:
-        print(f"Failed to create the directory '{patch_output_dir}'.")
+        # Save preprocessed image (intermediate only)
+        preprocessed_img_path = os.path.join(intermediates_output_dir, f"{basename}_preprocessed_image.png")
+        cv2.imwrite(preprocessed_img_path, preprocessed_img)
+        print(f"Preprocessed image saved at {preprocessed_img_path}")
 
-    # Patch size and stride can be customized by classification if needed
-    patch_size, stride = 256, 256
+        # Create brightened version for visualization
+        brightness_increase = 30
+        bright_img = cv2.convertScaleAbs(preprocessed_img, alpha=2, beta=brightness_increase)
 
-    # Get image dimensions
-    h, w = image.shape[:2]
-    label = 1  # Initialize patch index
+        # Save brightened image in both intermediates and final directories
+        bright_img_intermediates_path = os.path.join(intermediates_output_dir, f"{basename}_brightened_image.png")
+        cv2.imwrite(bright_img_intermediates_path, bright_img)
+        print(f"Brightened image saved at {bright_img_intermediates_path}")
 
-    # Slide horizontally across the image
-    for x in range(0, w + 1 - stride, stride):
-        # Extract full-height patch at current horizontal position
-        patch = image[0:h, x:x + patch_size]
-
-        # Resize patch to standard save size (usually for model input requirements)
-        patch = cv2.resize(patch, (save_size, save_size), interpolation=cv2.INTER_LINEAR)
-
-        # Save the patch as .tif file
-        patch_filename = f'{basename}_label{label}.tif'
-        full_patch_path = os.path.join(patch_output_dir, patch_filename)
-        cv2.imwrite(full_patch_path, patch)
-
-        label += 1
-
-    return (label - 1)  # Return total number of patches
+        bright_img_final_path = os.path.join(final_output_dir, f"{basename}_brightened_image.tif")
+        tifffile.imwrite(bright_img_final_path, bright_img)
+        print(f"Final brightened image saved at {bright_img_final_path}")
 
 def main():
     """
-    Main function for performing nuclei segmentation and patch extraction
-    on cancerous and non-cancerous TIFF image sets.
+    Main entry point for image preprocessing pipeline.
+
+    This function:
+    - Parses command-line arguments for DAPI channel index and downsampling factor.
+    - Sets up input TIFF directories for Cancerous and NotCancerous samples based on the environment (Docker/local).
+    - Validates the presence of TIFF files in these directories.
+    - Sets up and cleans output directories for intermediate and final preprocessing results.
+    - Calls the preprocessing function on cancerous and non-cancerous TIFF image lists.
     """
-    # Parse CLI arguments
-    parser = argparse.ArgumentParser(description="Segmentation parameters for nuclei detection in TIFF images.")
+
+    # Parse command-line arguments for preprocessing parameters
+    parser = argparse.ArgumentParser(description="Preprocessing parameters for TIFF images.")
+    parser.add_argument('--didx', '--dapi-channel-idx', type=int, required=True,
+                        help="Index of the DAPI channel (typically 0).")
     parser.add_argument('--d', '--downsample-interval', type=int, required=True,
-                        help="Factor by which to downsample the image (e.g., 4 = every 4th pixel).")
+                        help="Factor by which to downsample the image.")
     args = parser.parse_args()
 
-    global seg_dir  # Will be used inside segment_images()
-
-    # Set segmentation directory (Docker vs local)
-    if os.path.exists('/.dockerenv'):
-        seg_dir = '/tumor_seg'
-    else:
-        seg_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_seg'
-
-    # Clear previous segmentation output directory if it exists
-    if os.path.exists(seg_dir):
-        shutil.rmtree(seg_dir)
-        print(f"Directory '{seg_dir}' has been deleted.")
-    os.makedirs(seg_dir, exist_ok=True)
-    print(f"Directory '{seg_dir}' created successfully.")
-
-    # Define input paths for both classes (Docker vs local)
+    # Determine TIFF input directories based on environment
     if os.path.exists('/.dockerenv'):
         cancer_tif_dir = '/tif/Cancerous'
         no_cancer_tif_dir = '/tif/NotCancerous'
@@ -149,44 +137,51 @@ def main():
         cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/Cancerous'
         no_cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/NotCancerous'
 
-    # Check and load TIFF paths for both classes
-    for path in [cancer_tif_dir, no_cancer_tif_dir]:
-        if not pathlib.Path(path).exists():
-            raise FileNotFoundError(f"TIFF directory '{path}' does not exist.")
-
-    cancer_tif_paths = list(pathlib.Path(cancer_tif_dir).glob('*.tif'))
-    no_cancer_tif_paths = list(pathlib.Path(no_cancer_tif_dir).glob('*.tif'))
-
+    # Verify and list Cancerous TIFF files
+    cancer_tif_path_obj = pathlib.Path(cancer_tif_dir)
+    if not cancer_tif_path_obj.exists():
+        raise FileNotFoundError(f"TIFF directory '{cancer_tif_dir}' does not exist.")
+    cancer_tif_paths = list(cancer_tif_path_obj.glob('*.tif'))
     if not cancer_tif_paths:
-        raise FileNotFoundError(f"No .tif files found in '{cancer_tif_dir}'")
-    if not no_cancer_tif_paths:
-        raise FileNotFoundError(f"No .tif files found in '{no_cancer_tif_dir}'")
-
+        raise FileNotFoundError(f"No .tif files found in '{cancer_tif_dir}'.")
     print(f"Cancerous TIFF Paths: {cancer_tif_paths}")
+
+    # Verify and list NotCancerous TIFF files
+    no_cancer_tif_path_obj = pathlib.Path(no_cancer_tif_dir)
+    if not no_cancer_tif_path_obj.exists():
+        raise FileNotFoundError(f"TIFF directory '{no_cancer_tif_dir}' does not exist.")
+    no_cancer_tif_paths = list(no_cancer_tif_path_obj.glob('*.tif'))
+    if not no_cancer_tif_paths:
+        raise FileNotFoundError(f"No .tif files found in '{no_cancer_tif_dir}'.")
     print(f"NotCancerous TIFF Paths: {no_cancer_tif_paths}")
 
-    # Define patch output directory
-    if os.path.exists('/.dockerenv'):
-        patch_dir = '/tumor_patches'
-    else:
-        patch_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_patches'
+    # Setup tif_intermediates output directory and clean if exists
+    tif_intermediates_dir = '/tif_intermediates' if os.path.exists('/.dockerenv') else \
+        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif_intermediates'
+    if os.path.exists(tif_intermediates_dir):
+        shutil.rmtree(tif_intermediates_dir)
+        print(f"Directory '{tif_intermediates_dir}' has been deleted.")
+    os.makedirs(tif_intermediates_dir, exist_ok=True)
+    print(f"Directory '{tif_intermediates_dir}' was created successfully." if os.path.exists(tif_intermediates_dir) else
+          f"Failed to create the directory '{tif_intermediates_dir}'.")
 
-    # Remove previous patch output and recreate clean directory
-    if os.path.exists(patch_dir):
-        shutil.rmtree(patch_dir)
-        print(f"Directory '{patch_dir}' has been deleted.")
-    os.makedirs(patch_dir, exist_ok=True)
-    print(f"Directory '{patch_dir}' created successfully.")
+    # Setup tumor_patches output directory and clean if exists
+    tumor_output_dir = '/tumor_tif' if os.path.exists('/.dockerenv') else \
+        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_tif'
+    if os.path.exists(tumor_output_dir):
+        shutil.rmtree(tumor_output_dir)
+        print(f"Directory '{tumor_output_dir}' has been deleted.")
+    os.makedirs(tumor_output_dir, exist_ok=True)
+    print(f"Directory '{tumor_output_dir}' was created successfully." if os.path.exists(tumor_output_dir) else
+          f"Failed to create the directory '{tumor_output_dir}'.")
 
-    # Create subdirectories for each class label
-    for label in ['Cancerous', 'NotCancerous']:
-        path = os.path.join(patch_dir, label)
-        os.makedirs(path, exist_ok=True)
-        print(f"Directory '{path}' was created successfully.")
+    # Print the number of TIFF images in each category
+    print(f"Number of Cancerous TIFFs: {len(cancer_tif_paths)}")
+    print(f"Number of NotCancerous TIFFs: {len(no_cancer_tif_paths)}")
 
-    # Run segmentation and patch extraction for both datasets
-    segment_images(cancer_tif_paths, "Cancerous", args.d)
-    segment_images(no_cancer_tif_paths, "NotCancerous", args.d)
+    # Run the preprocessing pipeline for cancerous and non-cancerous images
+    preprocess_images(cancer_tif_paths, "Cancerous", tif_intermediates_dir, tumor_output_dir, args.didx, args.d)
+    preprocess_images(no_cancer_tif_paths, "NotCancerous", tif_intermediates_dir, tumor_output_dir, args.didx, args.d)
 
 if __name__ == "__main__":
     main()
