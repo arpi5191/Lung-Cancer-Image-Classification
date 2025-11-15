@@ -17,6 +17,7 @@ from skimage.segmentation import watershed
 from scipy.spatial import Voronoi, voronoi_plot_2d
 
 # Set random seed for reproducibility
+random.seed(42)            # Python random module
 np.random.seed(42)
 
 def compute_solidity(contour, contour_area):
