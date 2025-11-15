@@ -177,7 +177,7 @@ def process_labelling(labelling, nmin, nmax, img, minimum_solidity=0.4):
 
     return centroids, label_contours
 
-def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, downsample_interval):
+def voronoi(tif_paths, classification, intermediates_patch_dir, patch_dir, nmin, nmax, dapi_channel_idx, downsample_interval):
     """
     Processes a list of TIFF images to perform nuclei segmentation, generate Voronoi diagrams,
     and save various visualization outputs including labeled images, contours, centroids, and Voronoi overlays.
@@ -205,21 +205,41 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
     model = StarDist2D.from_pretrained('2D_versatile_fluo')
 
     for tif_path in tif_paths:
-        # Prepare output directory paths depending on environment
-        basename = tif_path.stem
+
+        # Prepare output directory paths depending on whether the code is running inside Docker or locally
+        basename = tif_path.stem  # Get the filename without extension to use as subfolder name
+
         if os.path.exists('/.dockerenv'):
-            output_dir = f'/voronoi/{classification}/{basename}'
+            # If running inside Docker, use Docker-specific paths
+            output_dir = f'/voronoi_intermediates/{classification}/{basename}'
+            final_output_dir = f'/voronoi_tif/{classification}/{basename}'
         else:
+            # If running locally, use full local filesystem paths
             output_dir = os.path.join(
-                "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi",
+                "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_intermediates",
                 classification,
                 basename,
             )
+            final_output_dir = os.path.join(
+                "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_tif",
+                classification,
+                basename,
+            )
+
+        # Create the directories if they don't already exist
         os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(final_output_dir, exist_ok=True)
+
+        # Check and confirm directory creation
         if os.path.exists(output_dir):
             print(f"Directory '{output_dir}' created successfully.")
         else:
             print(f"Failed to create the directory '{output_dir}'.")
+
+        if os.path.exists(final_output_dir):
+            print(f"Directory '{final_output_dir}' created successfully.")
+        else:
+            print(f"Failed to create the directory '{final_output_dir}'.")
 
         # Load and downsample DAPI channel image
         original_img = load_channel(tif_path, dapi_channel_idx)
@@ -309,8 +329,11 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
         ax.set_xlim(0, img_width)
         ax.set_ylim(img_height, 0)  # flip y-axis for image coordinate system
         ax.axis('off')
-        voronoi_path = os.path.join(output_dir, f"{basename}_voronoi_diagram.png")
+        voronoi_intermediates_path = os.path.join(output_dir, f"{basename}_voronoi_diagram.png")
+        fig.savefig(voronoi_intermediates_path, bbox_inches='tight', dpi=500)
+        voronoi_path = os.path.join(final_output_dir, f"{basename}_voronoi_diagram.png")
         fig.savefig(voronoi_path, bbox_inches='tight', dpi=500)
+
         plt.close(fig)
         print(f"Voronoi diagram saved at {voronoi_path}")
 
@@ -380,76 +403,10 @@ def voronoi(tif_paths, classification, patch_dir, nmin, nmax, dapi_channel_idx, 
             voronoi_img = voronoi_img.resize(original_image.size)
 
         # Blend original bright image and Voronoi diagram and save
-        original_voronoi_img = Image.blend(original_image, voronoi_img, alpha=0.3)
+        # original_voronoi_img = Image.blend(original_image, voronoi_img, alpha=0.3)
+        original_voronoi_img = voronoi_img
         original_voronoi_path = os.path.join(output_dir, f"{basename}_original_voronoi_image.png")
         original_voronoi_img.save(original_voronoi_path, format="PNG")
-
-        # Convert blended image to numpy array and extract patches for downstream analysis
-        original_voronoi_array = np.array(original_voronoi_img)
-        extract_patches(original_voronoi_array, patch_dir, classification, basename)
-
-def extract_patches(image, patch_dir, classification, basename, save_size=512):
-    """
-    Extracts overlapping patches horizontally from the input image and saves them to disk.
-
-    Parameters:
-    - image (np.ndarray): The input image array from which patches are extracted.
-    - patch_dir (str): Base directory where patches will be saved.
-    - classification (str): Label used for subfolder organization (e.g., "Cancerous").
-    - basename (str): Base filename used to prefix saved patch filenames.
-    - save_size (int, optional): The size (width and height) to resize each patch before saving. Default is 512.
-
-    Process:
-    - Sets patch size and stride depending on classification.
-    - Creates output directory based on environment (Docker or local).
-    - Extracts horizontal patches sliding across the width with specified stride.
-    - Resizes each patch to save_size x save_size.
-    - Saves patches as TIFF files named with basename and incremental label.
-    """
-
-    # Set patch size and stride; currently same for all classifications but easily adjustable
-    if classification == "Cancerous":
-        patch_size, stride = 256, 256
-    else:
-        patch_size, stride = 256, 256
-
-    # Determine output directory path depending on environment
-    if os.path.exists('/.dockerenv'):
-        patch_output_dir = f'/voronoi_patches/{classification}/{basename}'
-    else:
-        patch_output_dir = os.path.join(patch_dir, basename)
-
-    # Create directory if not existing
-    os.makedirs(patch_output_dir, exist_ok=True)
-
-    # Verify directory creation success
-    if os.path.exists(patch_output_dir):
-        print(f"Directory '{patch_output_dir}' was created successfully.")
-    else:
-        print(f"Failed to create the directory '{patch_output_dir}'.")
-
-    # Get image height and width
-    h, w = image.shape[:2]
-
-    label = 1  # Initialize patch numbering
-
-    # Loop over image width extracting patches
-    for x in range(0, w + 1 - stride, stride):
-        # Extract patch (full height, horizontal slice)
-        patch = image[0:h, x:x + patch_size]
-        print(0, h, x, x + patch_size)  # Debug print patch coordinates
-
-        # Resize patch to standard save size
-        patch = cv2.resize(patch, (save_size, save_size), interpolation=cv2.INTER_LINEAR)
-
-        # Construct patch filename with incremental label
-        patch_filename = f'{basename}_label{label}.tif'
-        full_patch_path = os.path.join(patch_output_dir, patch_filename)
-
-        # Save patch image to disk
-        cv2.imwrite(full_patch_path, patch)
-
-        label += 1  # Increment label for next patch
 
 def main():
     """
@@ -502,53 +459,56 @@ def main():
     print(f"NotCancerous TIFF Paths: {no_cancer_tif_paths}")
 
     # Setup Voronoi output directory and clean if exists
-    voronoi_dir = '/voronoi' if os.path.exists('/.dockerenv') else \
-        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi'
-    if os.path.exists(voronoi_dir):
-        shutil.rmtree(voronoi_dir)
-        print(f"Directory '{voronoi_dir}' has been deleted.")
-    os.makedirs(voronoi_dir, exist_ok=True)
-    print(f"Directory '{voronoi_dir}' was created successfully." if os.path.exists(voronoi_dir) else
-          f"Failed to create the directory '{voronoi_dir}'.")
+    voronoi_intermediates_dir = '/voronoi_intermediates' if os.path.exists('/.dockerenv') else \
+        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_intermediates'
+    if os.path.exists(voronoi_intermediates_dir):
+        shutil.rmtree(voronoi_intermediates_dir)
+        print(f"Directory '{voronoi_intermediates_dir}' has been deleted.")
+    os.makedirs(voronoi_intermediates_dir, exist_ok=True)
+    print(f"Directory '{voronoi_intermediates_dir}' was created successfully." if os.path.exists(voronoi_intermediates_dir) else
+          f"Failed to create the directory '{voronoi_intermediates_dir}'.")
 
     # Setup Cancerous patch directory
-    cancer_patch_dir = '/voronoi/Cancerous' if os.path.exists('/.dockerenv') else \
-        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi/Cancerous'
+    cancer_patch_intermediates_dir = '/voronoi_intermediates/Cancerous' if os.path.exists('/.dockerenv') else \
+        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_intermediates/Cancerous'
+    os.makedirs(cancer_patch_intermediates_dir, exist_ok=True)
+    print(f"Directory '{cancer_patch_intermediates_dir}' was created successfully." if os.path.exists(cancer_patch_intermediates_dir) else
+          f"Failed to create the directory '{cancer_patch_intermediates_dir}'.")
+
+    # Setup NotCancerous patch directory
+    no_cancer_patch_intermediates_dir = '/voronoi_intermediates/NotCancerous' if os.path.exists('/.dockerenv') else \
+        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_intermediates/NotCancerous'
+    os.makedirs(no_cancer_patch_intermediates_dir, exist_ok=True)
+    print(f"Directory '{no_cancer_patch_intermediates_dir}' was created successfully." if os.path.exists(no_cancer_patch_intermediates_dir) else
+          f"Failed to create the directory '{no_cancer_patch_intermediates_dir}'.")
+
+    # Setup segmented patches directory for Cancerous samples, cleaning old directory if present
+    cancer_patch_dir = '/voronoi_tif/Cancerous' if os.path.exists('/.dockerenv') else \
+        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_tif/Cancerous'
+    if os.path.exists(cancer_patch_dir):
+        shutil.rmtree(cancer_patch_dir)
     os.makedirs(cancer_patch_dir, exist_ok=True)
     print(f"Directory '{cancer_patch_dir}' was created successfully." if os.path.exists(cancer_patch_dir) else
           f"Failed to create the directory '{cancer_patch_dir}'.")
 
-    # Setup NotCancerous patch directory
-    no_cancer_patch_dir = '/voronoi/NotCancerous' if os.path.exists('/.dockerenv') else \
-        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi/NotCancerous'
+    # Setup segmented patches directory for NotCancerous samples, cleaning old directory if present
+    no_cancer_patch_dir = '/voronoi_tif/NotCancerous' if os.path.exists('/.dockerenv') else \
+        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_tif/NotCancerous'
+    if os.path.exists(no_cancer_patch_dir):
+        shutil.rmtree(no_cancer_patch_dir)
     os.makedirs(no_cancer_patch_dir, exist_ok=True)
     print(f"Directory '{no_cancer_patch_dir}' was created successfully." if os.path.exists(no_cancer_patch_dir) else
           f"Failed to create the directory '{no_cancer_patch_dir}'.")
 
-    # Setup segmented patches directory for Cancerous samples, cleaning old directory if present
-    cancer_patch_seg_dir = '/voronoi_patches/Cancerous' if os.path.exists('/.dockerenv') else \
-        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_patches/Cancerous'
-    if os.path.exists(cancer_patch_seg_dir):
-        shutil.rmtree(cancer_patch_seg_dir)
-    os.makedirs(cancer_patch_seg_dir, exist_ok=True)
-    print(f"Directory '{cancer_patch_seg_dir}' was created successfully." if os.path.exists(cancer_patch_seg_dir) else
-          f"Failed to create the directory '{cancer_patch_seg_dir}'.")
-
-    # Setup segmented patches directory for NotCancerous samples, cleaning old directory if present
-    no_cancer_patch_seg_dir = '/voronoi_patches/NotCancerous' if os.path.exists('/.dockerenv') else \
-        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/voronoi_patches/NotCancerous'
-    if os.path.exists(no_cancer_patch_seg_dir):
-        shutil.rmtree(no_cancer_patch_seg_dir)
-    os.makedirs(no_cancer_patch_seg_dir, exist_ok=True)
-    print(f"Directory '{no_cancer_patch_seg_dir}' was created successfully." if os.path.exists(no_cancer_patch_seg_dir) else
-          f"Failed to create the directory '{no_cancer_patch_seg_dir}'.")
-
+    # Print the number of TIFF images in each category
     print(f"Number of Cancerous TIFFs: {len(cancer_tif_paths)}")
     print(f"Number of NotCancerous TIFFs: {len(no_cancer_tif_paths)}")
 
     # Run the voronoi processing pipeline for cancerous and non-cancerous images
-    voronoi(cancer_tif_paths, "Cancerous", cancer_patch_seg_dir, args.nmin, args.nmax, args.didx, args.d)
-    voronoi(no_cancer_tif_paths, "NotCancerous", no_cancer_patch_seg_dir, args.nmin, args.nmax, args.didx, args.d)
+    voronoi(cancer_tif_paths, "Cancerous", cancer_patch_intermediates_dir, cancer_patch_dir, args.nmin,
+            args.nmax, args.didx, args.d)
+    voronoi(no_cancer_tif_paths, "NotCancerous", no_cancer_patch_intermediates_dir, no_cancer_patch_dir, args.nmin,
+            args.nmax, args.didx, args.d)
 
 if __name__ == "__main__":
     main()
