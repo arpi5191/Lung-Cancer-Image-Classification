@@ -2,6 +2,7 @@
 import os
 import cv2
 import shutil
+import random
 import pathlib
 import tifffile
 import numpy as np
@@ -18,7 +19,7 @@ from scipy.spatial import Voronoi, voronoi_plot_2d
 
 # Set random seed for reproducibility
 random.seed(42)            # Python random module
-np.random.seed(42)
+np.random.seed(42)         # NumPy
 
 def compute_solidity(contour, contour_area):
     '''
@@ -317,6 +318,9 @@ def main():
         cancer_img_dir = '/tumor_tif/Cancerous'
         no_cancer_img_dir = '/tumor_tif/NotCancerous'
     else:
+        # cancer_img_dir = '/ocean/projects/bio240001p/arpitha/tumor_tif/Cancerous'
+        # no_cancer_img_dir = '/ocean/projects/bio240001p/arpitha/tumor_tif/NotCancerous'
+        # Alternatively
         cancer_img_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_tif/Cancerous'
         no_cancer_img_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_tif/NotCancerous'
 

@@ -144,8 +144,9 @@ def main():
         }
         input_patches_dir, output_patches_dir = input_output_map[args.type]
     else:
-        # Local paths
-        base_path = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist"
+        base_path = "/ocean/projects/bio240001p/arpitha"
+        # Alternatively
+        # base_path = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist"
         input_output_map = {
             "tumor": (f"{base_path}/tumor_tif", f"{base_path}/tumor_patches"),
             "voronoi": (f"{base_path}/voronoi_tif", f"{base_path}/voronoi_patches"),

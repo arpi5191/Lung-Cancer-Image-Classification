@@ -2,6 +2,8 @@
 import os
 import torch
 import shutil
+import tifffile
+import numpy as np
 from PIL import Image
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
@@ -19,17 +21,23 @@ class SingleClassDataset(torch.utils.data.Dataset):
     Custom PyTorch Dataset for loading images of a single class (e.g., Cancerous or NotCancerous).
 
     Args:
-        folder (str): Path to the folder containing TIFF images.
+        folder (str): Path to the folder containing TIFF images (or list of image paths).
         transform (callable, optional): Transformations to apply to images (e.g., resizing, normalization).
-
-    Notes:
-        - Returns both the index and the transformed image tensor.
-        - Useful for ControlNet conditioning when generating synthetic images.
     """
     def __init__(self, folder, transform=None):
-        # Collect all .tif files in the folder
-        self.files = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(".tif")]
-        self.transform = transform  # Store transformations to apply later
+        # Handle both directory path and list of file paths
+        if isinstance(folder, list):
+            self.files = folder
+        else:
+            # Collect all .tif files from subdirectories
+            self.files = []
+            for subfolder in os.listdir(folder):
+                subfolder_path = os.path.join(folder, subfolder)
+                if os.path.isdir(subfolder_path):
+                    for f in os.listdir(subfolder_path):
+                        if f.endswith(".tif"):
+                            self.files.append(os.path.join(subfolder_path, f))
+        self.transform = transform
 
     def __len__(self):
         """Return the total number of images in the dataset."""
@@ -47,13 +55,14 @@ class SingleClassDataset(torch.utils.data.Dataset):
                 - idx: the index of the image (useful for tracking or debugging)
                 - image_tensor: the transformed image ready for model input
         """
-        # Open the image and convert to RGB
+        # Open the image and convert it to RGB (even if grayscale or multi-channel TIFF)
         img = Image.open(self.files[idx]).convert("RGB")
 
-        # Apply transformations if provided
+        # Apply the transformations (resize, normalize, etc.) if provided
         if self.transform:
             img = self.transform(img)
 
+        # Return both the index and the image tensor
         return idx, img
 
 def load_dataset(base_dir):
@@ -130,7 +139,7 @@ def load_model():
     print("Model loaded successfully.\n")
     return pipe, device
 
-def train_model(pipe, device, patch_dir, classifications, prompts, negative_prompts,
+def train_model(pipe, device, output_dir, classifications, prompts, negative_prompts,
                 num_images, loaders):
     """
     Generate synthetic histopathology images using the Stable Diffusion pipeline
@@ -139,7 +148,7 @@ def train_model(pipe, device, patch_dir, classifications, prompts, negative_prom
     Args:
         pipe: StableDiffusionControlNetPipeline loaded with ControlNet
         device: Device to run generation on
-        patch_dir: Directory to save generated images
+        output_dir: Directory to save generated images
         classifications: List of class labels
         prompts: List of positive prompts
         negative_prompts: List of negative prompts
@@ -216,13 +225,23 @@ def train_model(pipe, device, patch_dir, classifications, prompts, negative_prom
             image = image.convert("L")  # Convert to grayscale
 
             # --- Save image ---
-            class_dir = os.path.join(patch_dir, classifications[class_idx])
-            filepath = os.path.join(class_dir, f"context_image_{img_idx}.tiff")
-            image.save(filepath)
+            class_dir = os.path.join(output_dir, classifications[class_idx])
+            image_name = f"context_image_{img_idx}"
+            image_folder = os.path.join(class_dir, image_name)
+            os.makedirs(image_folder, exist_ok=True)
+            filepath = os.path.join(image_folder, f"{image_name}.tif")
+
+            # Convert PIL Image to numpy array and save with tifffile
+            image_array = np.array(image)
+            tifffile.imwrite(filepath, image_array)
             print(f"Saved to: {filepath}")
 
+            # Clear memory after each image
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
     print(f"\n{'='*60}")
-    print(f"All {sum(num_images)} images saved to {patch_dir}")
+    print(f"All {sum(num_images)} images saved to {output_dir}")
     print(f"{'='*60}")
 
 def main():
@@ -239,22 +258,22 @@ def main():
 
     # --- Determine output directory ---
     if os.path.exists('/.dockerenv'):
-        patch_dir = '/context_tif'
+        output_dir = '/context_tif'
     else:
-        patch_dir = '/ocean/projects/bio240001p/arpitha/context_tif'
+        output_dir = '/ocean/projects/bio240001p/arpitha/context_tif'
         # Alternatively, local path can be used:
-        # patch_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/context_tif'
+        # output_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/context_tif'
 
     # --- Clean and create output directory ---
-    if os.path.exists(patch_dir):
-        shutil.rmtree(patch_dir)
-        print(f"Directory '{patch_dir}' has been deleted.")
-    os.makedirs(patch_dir, exist_ok=True)
-    print(f"Directory '{patch_dir}' created successfully.")
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+        print(f"Directory '{output_dir}' has been deleted.")
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Directory '{output_dir}' created successfully.")
 
     # --- Create subdirectories for each class ---
     for label in ['Cancerous', 'NotCancerous']:
-        path = os.path.join(patch_dir, label)
+        path = os.path.join(output_dir, label)
         os.makedirs(path, exist_ok=True)
         print(f"Directory '{path}' was created successfully.")
 
@@ -262,9 +281,9 @@ def main():
     if os.path.exists('/.dockerenv'):
         base_dir = "/tif/"
     else:
-        base_dir = "/ocean/projects/bio240001p/arpitha/tif"
+        base_dir = "/ocean/projects/bio240001p/arpitha/tumor_tif"
         # Alternatively, local path can be used:
-        # base_dir = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/"
+        # base_dir = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_tif/"
 
     # --- Load DataLoaders ---
     cancer_loader, no_cancer_loader = load_dataset(base_dir)
@@ -291,7 +310,7 @@ def main():
     pipe, device = load_model()
 
     # --- Generate synthetic images ---
-    train_model(pipe, device, patch_dir, classifications, prompts, negative_prompts,
+    train_model(pipe, device, output_dir, classifications, prompts, negative_prompts,
                 num_images, loaders)
 
 if __name__ == "__main__":

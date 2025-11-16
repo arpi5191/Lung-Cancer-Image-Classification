@@ -1,64 +1,39 @@
-# Import necessary libraries
+# Imports packages
 import os
-import cv2
 import torch
 import shutil
-import pathlib
 import tifffile
-import argparse
 import numpy as np
 from PIL import Image
 import torch.nn as nn
 from scipy.ndimage import zoom
 from diffusers import UNet2DModel
-import skimage.exposure as exposure
-from csbdeep.utils import normalize
-from stardist.models import StarDist2D
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-from diffusers import AutoencoderKL, UNet2DConditionModel, LMSDiscreteScheduler
-
-def get_class_from_path(path):
-    """
-    Determines the class label of an image based on its directory.
-
-    Args:
-        path (str): Full file path to the image.
-
-    Returns:
-        str: Name of the parent directory representing the class.
-    """
-    return os.path.basename(os.path.dirname(path))
-
-
-def load_channel(tif_path):
-    """
-    Loads a single channel (grayscale) from a multi-channel TIFF image and rescales intensity.
-
-    Args:
-        tif_path (str): The file path to the TIFF image.
-
-    Returns:
-        np.ndarray: 2D array of the grayscale image with intensity values scaled to 0-255.
-    """
-    # Read the image (assumed to be single-channel or grayscale)
-    channel = tifffile.imread(tif_path)
-
-    # Rescale intensity for better contrast and uniformity
-    return exposure.rescale_intensity(channel, in_range='image', out_range=(0, 255)).astype(np.uint8)
+from torchvision import transforms
+from diffusers import AutoencoderKL, LMSDiscreteScheduler
 
 class SingleClassDataset(torch.utils.data.Dataset):
     """
     Custom PyTorch Dataset for loading images of a single class (e.g., Cancerous or NotCancerous).
 
     Args:
-        folder (str): Path to the folder containing TIFF images.
+        folder (str): Path to the folder containing TIFF images (or list of image paths).
         transform (callable, optional): Transformations to apply to images (e.g., resizing, normalization).
     """
     def __init__(self, folder, transform=None):
-        # Collect all .tif files in the folder
-        self.files = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(".tif")]
-        self.transform = transform  # Store the transformations to apply later
+        # Handle both directory path and list of file paths
+        if isinstance(folder, list):
+            self.files = folder
+        else:
+            # Collect all .tif files from subdirectories
+            self.files = []
+            for subfolder in os.listdir(folder):
+                subfolder_path = os.path.join(folder, subfolder)
+                if os.path.isdir(subfolder_path):
+                    for f in os.listdir(subfolder_path):
+                        if f.endswith(".tif"):
+                            self.files.append(os.path.join(subfolder_path, f))
+        self.transform = transform
 
     def __len__(self):
         """Return the total number of images in the dataset."""
@@ -108,8 +83,8 @@ def load_dataset(base_dir):
     no_cancer_dir = os.path.join(base_dir, "NotCancerous")
 
     # Create DataLoaders for both classes
-    cancer_loader = DataLoader(SingleClassDataset(cancer_dir, transform), batch_size=16, shuffle=True)
-    no_cancer_loader = DataLoader(SingleClassDataset(no_cancer_dir, transform), batch_size=16, shuffle=True)
+    cancer_loader = DataLoader(SingleClassDataset(cancer_dir, transform), batch_size=21, shuffle=True)
+    no_cancer_loader = DataLoader(SingleClassDataset(no_cancer_dir, transform), batch_size=13, shuffle=True)
 
     return cancer_loader, no_cancer_loader
 
@@ -264,7 +239,7 @@ def train_model(dataloader, num_epochs=1):
         # Print epoch loss for monitoring training progress
         print(f"Epoch {epoch+1}/{num_epochs} completed, loss={loss.item():.4f}")
 
-def generate_synthetic(num_images: int, classification, patch_dir):
+def generate_synthetic(num_images: int, classification, output_dir):
     """
     Generate synthetic images using a trained Latent Diffusion Model (LDM).
 
@@ -358,10 +333,16 @@ def generate_synthetic(num_images: int, classification, patch_dir):
             # Scale to 0-255 and convert to uint8 for TIFF saving
             grayscale = (grayscale * 255).astype(np.uint8)
 
-            # Save the image as TIFF
-            output_path = os.path.join(patch_dir, classification, f"generated_image_{i}.tif")
-            tifffile.imwrite(output_path, grayscale)
-            print(f"Saved {output_path} with shape {grayscale.shape}")
+            # Save the image in the class-specific folder with subfolder
+            class_dir = os.path.join(output_dir, classification)
+            image_name = f"generated_image_{i}"  # Changed from img_idx to i
+            image_folder = os.path.join(class_dir, image_name)
+            os.makedirs(image_folder, exist_ok=True)
+            filepath = os.path.join(image_folder, f"{image_name}.tif")
+
+            # Save with tifffile
+            tifffile.imwrite(filepath, grayscale)
+            print(f"Saved to: {filepath}")
 
             # Clear GPU cache to prevent memory buildup if using CUDA
             if torch.cuda.is_available():
@@ -379,28 +360,33 @@ def main():
     """
     # Set patch output directory based on environment
     if os.path.exists('/.dockerenv'):
-        patch_dir = '/diffusion_tif'  # Use Docker path
+        output_dir = '/diffusion_tif'  # Use Docker path
     else:
-        patch_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/diffusion_tif'  # Local path
+        output_dir = '/ocean/projects/bio240001p/arpitha/diffusion_tif'
+        # Alternatively
+        # output_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/diffusion_tif'  # Local path
 
     # Remove old patch directory if it exists
-    if os.path.exists(patch_dir):
-        shutil.rmtree(patch_dir)
-        print(f"Directory '{patch_dir}' has been deleted.")
-    os.makedirs(patch_dir, exist_ok=True)  # Create fresh directory
-    print(f"Directory '{patch_dir}' created successfully.")
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+        print(f"Directory '{output_dir}' has been deleted.")
+    os.makedirs(output_dir, exist_ok=True)  # Create fresh directory
+    print(f"Directory '{output_dir}' created successfully.")
 
     # Create class-specific subdirectories
     for label in ['Cancerous', 'NotCancerous']:
-        path = os.path.join(patch_dir, label)
+        path = os.path.join(output_dir, label)
         os.makedirs(path, exist_ok=True)
         print(f"Directory '{path}' was created successfully.")
 
     # Set base dataset directory depending on environment
     if os.path.exists('/.dockerenv'):
-        base_dir = "/tif/"  # Docker path
+        base_dir = "/tumor_tif/"  # Docker path
     else:
-        base_dir = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/"  # Local path
+        base_dir = '/ocean/projects/bio240001p/arpitha/tumor_tif'
+        # Alternatively
+        # base_dir = "/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_tif/"  # Local path
+
 
     # Load DataLoaders for cancerous and non-cancerous images
     cancer_loader, no_cancer_loader = load_dataset(base_dir)
@@ -422,8 +408,8 @@ def main():
 
     # 3. Generate 5 synthetic cancerous images using the trained model
     #    - Uses reverse diffusion starting from Gaussian noise
-    #    - Saves generated images in the patch_dir under the "Cancerous" folder
-    generate_synthetic(21, "Cancerous", patch_dir)
+    #    - Saves generated images in the output_dir under the "Cancerous" folder
+    generate_synthetic(21, "Cancerous", output_dir)
 
     # -----------------------------------------------------------------
     # Repeat the process for non-cancerous dataset
@@ -436,8 +422,8 @@ def main():
     #    Updates the model to learn noise patterns and structures typical of healthy tissue
     train_model(no_cancer_loader)
 
-    # 3. Generate 5 synthetic non-cancerous images and save them in patch_dir under "NotCancerous"
-    generate_synthetic(13, "NotCancerous", patch_dir)
+    # 3. Generate 5 synthetic non-cancerous images and save them in output_dir under "NotCancerous"
+    generate_synthetic(13, "NotCancerous", output_dir)
 
 if __name__ == "__main__":
     main()

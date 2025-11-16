@@ -134,8 +134,11 @@ def main():
         cancer_tif_dir = '/tif/Cancerous'
         no_cancer_tif_dir = '/tif/NotCancerous'
     else:
-        cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/Cancerous'
-        no_cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/NotCancerous'
+        cancer_tif_dir = '/ocean/projects/bio240001p/arpitha/tif/Cancerous'
+        no_cancer_tif_dir = '/ocean/projects/bio240001p/arpitha/tif/NotCancerous'
+        # Alternatively
+        # cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/Cancerous'
+        # no_cancer_tif_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif/NotCancerous'
 
     # Verify and list Cancerous TIFF files
     cancer_tif_path_obj = pathlib.Path(cancer_tif_dir)
@@ -157,7 +160,10 @@ def main():
 
     # Setup tif_intermediates output directory and clean if exists
     tif_intermediates_dir = '/tif_intermediates' if os.path.exists('/.dockerenv') else \
-        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif_intermediates'
+        '/ocean/projects/bio240001p/arpitha/tif_intermediates'
+    # Alternatively
+    # tif_intermediates_dir = '/tif_intermediates' if os.path.exists('/.dockerenv') else \
+    #     '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tif_intermediates'
     if os.path.exists(tif_intermediates_dir):
         shutil.rmtree(tif_intermediates_dir)
         print(f"Directory '{tif_intermediates_dir}' has been deleted.")
@@ -167,7 +173,10 @@ def main():
 
     # Setup tumor_patches output directory and clean if exists
     tumor_output_dir = '/tumor_tif' if os.path.exists('/.dockerenv') else \
-        '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_tif'
+        '/ocean/projects/bio240001p/arpitha/tumor_tif'
+    # # Alternatively
+    # tumor_output_dir = '/tumor_tif' if os.path.exists('/.dockerenv') else \
+    #     '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/tumor_tif'
     if os.path.exists(tumor_output_dir):
         shutil.rmtree(tumor_output_dir)
         print(f"Directory '{tumor_output_dir}' has been deleted.")

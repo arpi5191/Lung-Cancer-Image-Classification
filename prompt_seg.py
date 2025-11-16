@@ -2,6 +2,8 @@
 import os
 import torch
 import shutil
+import tifffile
+import numpy as np
 from PIL import Image
 from diffusers import StableDiffusionPipeline
 
@@ -45,14 +47,14 @@ def load_model():
     return pipe, device
 
 
-def train_model(pipe, device, patch_dir, classifications, prompts, negative_prompts, num_images):
+def train_model(pipe, device, output_dir, classifications, prompts, negative_prompts, num_images):
     """
     Generate synthetic histopathology images using the Stable Diffusion pipeline.
 
     Args:
         pipe (StableDiffusionPipeline): Loaded Stable Diffusion pipeline
         device (str): Device to run generation on ('cuda' or 'cpu')
-        patch_dir (str): Base directory to save generated images
+        output_dir (str): Base directory to save generated images
         classifications (list of str): Labels for each class (e.g., 'Cancerous')
         prompts (list of str): Positive text prompts for image generation
         negative_prompts (list of str): Negative prompts to avoid unwanted artifacts
@@ -94,13 +96,23 @@ def train_model(pipe, device, patch_dir, classifications, prompts, negative_prom
             # Convert to true grayscale
             image = image.convert("L")
 
-            # Save the image in the class-specific folder
-            class_dir = os.path.join(patch_dir, classifications[class_idx])
-            filepath = os.path.join(class_dir, f"prompt_image_{img_idx}.tiff")
-            image.save(filepath)
+            # Save the image in the class-specific folder with subfolder
+            class_dir = os.path.join(output_dir, classifications[class_idx])
+            image_name = f"prompt_image_{img_idx}"
+            image_folder = os.path.join(class_dir, image_name)
+            os.makedirs(image_folder, exist_ok=True)
+            filepath = os.path.join(image_folder, f"{image_name}.tif")
+
+            # Convert to numpy and save with tifffile
+            image_array = np.array(image)
+            tifffile.imwrite(filepath, image_array)
             print(f"Saved to: {filepath}")
 
-    print(f"\nAll {sum(num_images)} images saved to {patch_dir}")
+            # Clear GPU memory after each image
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    print(f"\nAll {sum(num_images)} images saved to {output_dir}")
 
 
 def main():
@@ -113,22 +125,22 @@ def main():
     """
     # Determine output directory based on environment
     if os.path.exists('/.dockerenv'):
-        patch_dir = '/prompt_tif'  # Use this path in Docker environment
+        output_dir = '/prompt_tif'  # Use this path in Docker environment
     else:
-        patch_dir = '/ocean/projects/bio240001p/arpitha/prompt_tif'
+        output_dir = '/ocean/projects/bio240001p/arpitha/prompt_tif'
         # Alternatively, local path can be used:
-        # patch_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/prompt_tif'
+        # output_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/prompt_tif'
 
     # Remove old patch directory if it exists to start fresh
-    if os.path.exists(patch_dir):
-        shutil.rmtree(patch_dir)
-        print(f"Directory '{patch_dir}' has been deleted.")
-    os.makedirs(patch_dir, exist_ok=True)
-    print(f"Directory '{patch_dir}' created successfully.")
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+        print(f"Directory '{output_dir}' has been deleted.")
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Directory '{output_dir}' created successfully.")
 
     # Create subdirectories for each class
     for label in ['Cancerous', 'NotCancerous']:
-        path = os.path.join(patch_dir, label)
+        path = os.path.join(output_dir, label)
         os.makedirs(path, exist_ok=True)
         print(f"Directory '{path}' was created successfully.")
 
@@ -154,7 +166,7 @@ def main():
     pipe, device = load_model()
 
     # Generate synthetic images
-    train_model(pipe, device, patch_dir, classifications, prompts, negative_prompts, num_images)
+    train_model(pipe, device, output_dir, classifications, prompts, negative_prompts, num_images)
 
 if __name__ == "__main__":
     main()
