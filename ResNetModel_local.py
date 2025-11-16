@@ -491,9 +491,14 @@ def load_model():
     # Select device: GPU if available, else CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Transfer model to the chosen device
-    model.to(device)
+    # Wrap for multi-GPU if more than 1 GPU available
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
 
+    # Send model to GPU(s)
+    model = model.to(device)
+
+    # Return the device and the model now on GPU(s) so inputs can be moved to the same device for training/inference
     return device, model
 
 def get_activation(name, activation):
@@ -919,33 +924,45 @@ def main():
 
     # Parse input argument to choose the segmentation patch type to use
     parser = argparse.ArgumentParser(description="Segmentation input type")
-    parser.add_argument('--type', type=str, choices=["tumor", "nuclei", "voronoi"], required=True)
+    parser.add_argument('--type', type=str, choices=["tumor", "voronoi", "diffusion", "prompt", "context"], required=True)
     args = parser.parse_args()
 
     # Determine base paths depending on running inside Docker or locally
     if os.path.exists('/.dockerenv'):
         # Docker environment paths for patch directories
-        if args.type == "nuclei":
-            cancer_patches_dir = '/nuclei_patches/Cancerous'
-            no_cancer_patches_dir = '/nuclei_patches/NotCancerous'
-        elif args.type == "tumor":
+        if args.type == "tumor":
             cancer_patches_dir = '/tumor_patches/Cancerous'
             no_cancer_patches_dir = '/tumor_patches/NotCancerous'
         elif args.type == "voronoi":
             cancer_patches_dir = '/voronoi_patches/Cancerous'
             no_cancer_patches_dir = '/voronoi_patches/NotCancerous'
+        elif args.type == "diffusion":
+            cancer_patches_dir = '/diffusion_patches/Cancerous'
+            no_cancer_patches_dir = '/diffusion_patches/NotCancerous'
+        elif args.type == "prompt":
+            cancer_patches_dir = '/prompt_patches/Cancerous'
+            no_cancer_patches_dir = '/prompt_patches/NotCancerous'
+        elif args.type == "context":
+            cancer_patches_dir = '/context_patches/Cancerous'
+            no_cancer_patches_dir = '/context_patches/NotCancerous'
     else:
         # Local environment paths
         base_path = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist'
-        if args.type == "nuclei":
-            cancer_patches_dir = f'{base_path}/nuclei_patches/Cancerous'
-            no_cancer_patches_dir = f'{base_path}/nuclei_patches/NotCancerous'
-        elif args.type == "tumor":
+        if args.type == "tumor":
             cancer_patches_dir = f'{base_path}/tumor_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/tumor_patches/NotCancerous'
         elif args.type == "voronoi":
             cancer_patches_dir = f'{base_path}/voronoi_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/voronoi_patches/NotCancerous'
+        elif args.type == "diffusion":
+            cancer_patches_dir = f'{base_path}/diffusion_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/diffusion_patches/NotCancerous'
+        elif args.type == "prompt":
+            cancer_patches_dir = f'{base_path}/prompt_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/prompt_patches/NotCancerous'
+        elif args.type == "context":
+            cancer_patches_dir = f'{base_path}/context_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/context_patches/NotCancerous'
 
     # Initialize dictionary and counter to hold image patch paths and total image count
     image_patches = {}

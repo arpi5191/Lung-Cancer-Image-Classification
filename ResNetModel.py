@@ -1,44 +1,35 @@
 # Import packages
+ # Core Python
 import os
 import time
-import copy
-import torch
 import random
 import shutil
-import tifffile
+from pathlib import Path
+from collections import Counter
 import argparse
-import torchvision
+import copy
+
+# Scientific / Data
 import numpy as np
 import pandas as pd
-from PIL import Image
-import torch.nn as nn
-from torch import optim
-from pathlib import Path
-from torch.optim import SGD
-from torch.optim import Adam
 import matplotlib.pyplot as plt
-from collections import Counter
+
+# Image handling
+from PIL import Image
+import tifffile
+
+# PyTorch
+import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import transforms
-import torchvision.models as models
+from torch import optim
+from torch.optim import Adam, SGD
 from torch.utils.data import DataLoader
-import torchvision.datasets as datasets
-from torch.utils.data import DataLoader
-from sklearn.metrics import confusion_matrix
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data.sampler import SubsetRandomSampler
+from torch.utils.data.sampler import SubsetRandomSampler, WeightedRandomSampler
 
-# 1. Set seeds
-# seed = 30
-# random.seed(seed)
-# np.random.seed(seed)
-# torch.manual_seed(seed)
-# torch.cuda.manual_seed(seed)
-# torch.cuda.manual_seed_all(seed)  # if using multi-GPU
-
-# 2. Make cudnn deterministic
-# torch.backends.cudnn.deterministic = True
-# torch.backends.cudnn.benchmark = False
+# Torchvision
+import torchvision
+from torchvision import transforms, datasets, models
 
 # Define the global variables for feature dimension, number of classes, and activation
 global feature_dim
@@ -945,33 +936,45 @@ def main():
 
     # Parse input argument to choose the segmentation patch type to use
     parser = argparse.ArgumentParser(description="Segmentation input type")
-    parser.add_argument('--type', type=str, choices=["tumor", "nuclei", "voronoi"], required=True)
+    parser.add_argument('--type', type=str, choices=["tumor", "voronoi", "diffusion", "prompt", "context"], required=True)
     args = parser.parse_args()
 
     # Determine base paths depending on running inside Docker or locally
     if os.path.exists('/.dockerenv'):
         # Docker environment paths for patch directories
-        if args.type == "nuclei":
-            cancer_patches_dir = '/nuclei_patches/Cancerous'
-            no_cancer_patches_dir = '/nuclei_patches/NotCancerous'
-        elif args.type == "tumor":
+        if args.type == "tumor":
             cancer_patches_dir = '/tumor_patches/Cancerous'
             no_cancer_patches_dir = '/tumor_patches/NotCancerous'
         elif args.type == "voronoi":
             cancer_patches_dir = '/voronoi_patches/Cancerous'
             no_cancer_patches_dir = '/voronoi_patches/NotCancerous'
+        elif args.type == "diffusion":
+            cancer_patches_dir = '/diffusion_patches/Cancerous'
+            no_cancer_patches_dir = '/diffusion_patches/NotCancerous'
+        elif args.type == "prompt":
+            cancer_patches_dir = '/prompt_patches/Cancerous'
+            no_cancer_patches_dir = '/prompt_patches/NotCancerous'
+        elif args.type == "context":
+            cancer_patches_dir = '/context_patches/Cancerous'
+            no_cancer_patches_dir = '/context_patches/NotCancerous'
     else:
         # Local environment paths
         base_path = '/ocean/projects/bio240001p/arpitha'
-        if args.type == "nuclei":
-            cancer_patches_dir = f'{base_path}/nuclei_patches/Cancerous'
-            no_cancer_patches_dir = f'{base_path}/nuclei_patches/NotCancerous'
-        elif args.type == "tumor":
+        if args.type == "tumor":
             cancer_patches_dir = f'{base_path}/tumor_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/tumor_patches/NotCancerous'
         elif args.type == "voronoi":
             cancer_patches_dir = f'{base_path}/voronoi_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/voronoi_patches/NotCancerous'
+        elif args.type == "diffusion":
+            cancer_patches_dir = f'{base_path}/diffusion_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/diffusion_patches/NotCancerous'
+        elif args.type == "prompt":
+            cancer_patches_dir = f'{base_path}/prompt_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/prompt_patches/NotCancerous'
+        elif args.type == "context":
+            cancer_patches_dir = f'{base_path}/context_patches/Cancerous'
+            no_cancer_patches_dir = f'{base_path}/context_patches/NotCancerous'
 
     # Initialize dictionary and counter to hold image patch paths and total image count
     image_patches = {}
