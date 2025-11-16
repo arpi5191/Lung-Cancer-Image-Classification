@@ -2,6 +2,7 @@
 import os
 import torch
 import shutil
+import random
 import tifffile
 import numpy as np
 from PIL import Image
@@ -15,6 +16,17 @@ os.environ['HF_HOME'] = '/ocean/projects/bio240001p/arpitha/hf_cache'
 os.environ['TRANSFORMERS_CACHE'] = '/ocean/projects/bio240001p/arpitha/hf_cache'
 os.environ['HF_DATASETS_CACHE'] = '/ocean/projects/bio240001p/arpitha/hf_cache'
 os.environ['TORCH_HOME'] = '/ocean/projects/bio240001p/arpitha/torch_cache'
+
+# ------------------------------
+# Set random seed for reproducibility
+# ------------------------------
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 class SingleClassDataset(torch.utils.data.Dataset):
     """

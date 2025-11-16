@@ -2,10 +2,22 @@
 import os
 import torch
 import shutil
+import random
 import tifffile
 import numpy as np
 from PIL import Image
 from diffusers import StableDiffusionPipeline
+
+# ------------------------------
+# Set random seed for reproducibility
+# ------------------------------
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 def load_model():
     """
@@ -70,7 +82,7 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
             print(f"'{prompts[class_idx]}'")
 
             # Set a reproducible seed per image
-            generator = torch.Generator(device=device).manual_seed(42 + img_idx)
+            generator = torch.Generator(device=device)
 
             # Use automatic mixed precision for faster and memory-efficient inference
             # On GPU, operations run in float16; on CPU, they run in float32

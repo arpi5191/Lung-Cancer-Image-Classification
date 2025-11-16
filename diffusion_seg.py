@@ -2,6 +2,7 @@
 import os
 import torch
 import shutil
+import random
 import tifffile
 import numpy as np
 from PIL import Image
@@ -11,6 +12,17 @@ from diffusers import UNet2DModel
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from diffusers import AutoencoderKL, LMSDiscreteScheduler
+
+# ------------------------------
+# Set random seed for reproducibility
+# ------------------------------
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 class SingleClassDataset(torch.utils.data.Dataset):
     """
