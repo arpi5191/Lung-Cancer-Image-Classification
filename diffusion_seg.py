@@ -9,8 +9,10 @@ from PIL import Image
 import torch.nn as nn
 from scipy.ndimage import zoom
 from diffusers import UNet2DModel
-from torch.utils.data import DataLoader
 from torchvision import transforms
+from diffusers import DDIMScheduler
+from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from diffusers import AutoencoderKL, LMSDiscreteScheduler
 
 # ------------------------------
@@ -178,10 +180,13 @@ def load_model():
     # - num_train_timesteps: how many diffusion steps (commonly 1000).
     #
     # LMSDiscreteScheduler is used in Stable Diffusion to handle noise scaling in latent space.
-    scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear",
-                                     num_train_timesteps=1000)
+    # scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear",
+    #                                  num_train_timesteps=1000)
 
-def train_model(dataloader, num_epochs=1):
+    scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012,
+                              beta_schedule="scaled_linear", num_train_timesteps=1000)
+
+def train_model(dataloader, num_epochs=500):
     """
     Train the UNet component of a latent diffusion model on a dataset of images.
 
@@ -206,6 +211,10 @@ def train_model(dataloader, num_epochs=1):
     # Initialize optimizer for UNet parameters
     optimizer = torch.optim.Adam(unet.parameters(), lr=1e-4)
 
+    # Create a cosine annealing learning rate scheduler that gradually decreases the LR from the
+    # initial value to 0 over `num_epochs`
+    scheduler_lr = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+
     # Loop over epochs
     for epoch in range(num_epochs):
         for batch_idx, (indices, images) in enumerate(dataloader):
@@ -217,7 +226,8 @@ def train_model(dataloader, num_epochs=1):
             # Step 1: Encode images into latent space using the VAE
             # ------------------------------------------------------------------
             # VAE returns a distribution; we sample from it to get latent vectors
-            latents = vae.encode(images).latent_dist.sample() * 0.18215  # scaling factor used in Stable Diffusion
+            # latents = vae.encode(images).latent_dist.sample() * 0.18215  # scaling factor used in Stable Diffusion
+            latents = vae.encode(images).latent_dist.sample()
 
             # ------------------------------------------------------------------
             # Step 2: Sample random timesteps for the diffusion process
@@ -245,8 +255,8 @@ def train_model(dataloader, num_epochs=1):
             loss.backward()        # backpropagate
             optimizer.step()       # update UNet parameters
 
-            # For demonstration/debugging, process only the first batch
-            break
+        # Update the learning rate according to the cosine annealing schedule (call once per epoch)
+        scheduler_lr.step()
 
         # Print epoch loss for monitoring training progress
         print(f"Epoch {epoch+1}/{num_epochs} completed, loss={loss.item():.4f}")
@@ -299,7 +309,7 @@ def generate_synthetic(num_images: int, classification, output_dir):
             # 2. Initialize the diffusion scheduler for inference
             # -----------------------------------------------------------------
             # Sets up the noise schedule and timesteps for reverse diffusion
-            scheduler.set_timesteps(10)  # fewer timesteps → faster generation
+            scheduler.set_timesteps(30)  # fewer timesteps → faster generation
 
             # -----------------------------------------------------------------
             # 3. Iterative denoising (reverse diffusion) process
