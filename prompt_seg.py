@@ -11,13 +11,13 @@ from diffusers import StableDiffusionPipeline
 # ------------------------------
 # Set random seed for reproducibility
 # ------------------------------
-SEED = 42
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-torch.cuda.manual_seed_all(SEED)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
+# SEED = 42
+# random.seed(SEED)
+# np.random.seed(SEED)
+# torch.manual_seed(SEED)
+# torch.cuda.manual_seed_all(SEED)
+# torch.backends.cudnn.deterministic = True
+# torch.backends.cudnn.benchmark = False
 
 def load_model():
     """
@@ -83,6 +83,7 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
 
             # Set a reproducible seed per image
             generator = torch.Generator(device=device)
+            generator.manual_seed(42 + img_idx)
 
             # Use automatic mixed precision for faster and memory-efficient inference
             # On GPU, operations run in float16; on CPU, they run in float32
@@ -92,8 +93,8 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
                 result = pipe(
                     prompt=prompts[class_idx],             # Positive prompt describing what we want to generate
                     negative_prompt=negative_prompts[class_idx],  # Negative prompt specifying what to avoid (e.g., blurry, cartoon)
-                    num_inference_steps=5,                 # Number of denoising steps; more steps = higher quality but slower
-                    guidance_scale=7.5,                    # How strongly the model follows the prompt; higher = more faithful to text
+                    num_inference_steps=50,                 # Number of denoising steps; more steps = higher quality but slower
+                    guidance_scale=10,                    # How strongly the model follows the prompt; higher = more faithful to text
                     width=512,                             # Output image width in pixels (native Stable Diffusion resolution)
                     height=512,                            # Output image height in pixels
                     generator=generator                     # Random generator for reproducibility (ensures same output for same seed)
@@ -162,16 +163,18 @@ def main():
     # Define class labels
     classifications = ["Cancerous", "NotCancerous"]
 
-    # Define positive prompts for generating lung histopathology images
+    # Positive prompts: what the model should generate
+    # Each string describes the desired characteristics of the synthetic histopathology image
     prompts = [
-        "Lung histopathology grayscale image showing malignant nuclei, high detail, realistic, microscopic view",
-        "Lung histopathology grayscale image showing benign nuclei, high detail, realistic, microscopic view"
+    "produce a lung histopathology grayscale image showing adenocarcinoma tumor tissue with malignant nuclei from a 66-year-old male donor.",
+    "produce a lung histopathology grayscale image showing adenocarcinoma tumor tissue with benign nuclei from a 66-year-old male donor."
     ]
 
-    # Define negative prompts to avoid unwanted artifacts
+    # Negative prompts: features to avoid in the generated image
+    # These discourage unwanted artifacts, unrealistic textures, and common mistakes in synthetic images
     negative_prompts = [
-        "blurry, low quality, distorted, cartoon, drawing, artificial, text, watermark",
-        "blurry, low quality, distorted, cartoon, drawing, artificial, text, watermark"
+    "blurry, out of focus, low resolution, artifacts, cartoon, illustration, 3D render, text, annotations, watermark, distorted, unrealistic texture, poor contrast, overexposed, underexposed, tissue folds, air bubbles, staining artifacts",
+    "blurry, out of focus, low resolution, artifacts, cartoon, illustration, 3D render, text, annotations, watermark, distorted, unrealistic texture, poor contrast, overexposed, underexposed, tissue folds, air bubbles, staining artifacts"
     ]
 
     # Load Stable Diffusion model

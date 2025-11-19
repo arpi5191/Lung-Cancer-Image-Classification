@@ -224,8 +224,8 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
                     negative_prompt=negative_prompts[class_idx],
                     image=conditioning_image,  # ControlNet guidance
                     controlnet_conditioning_scale=0.8,  # Strength of ControlNet influence
-                    num_inference_steps=10,  # More steps for higher quality
-                    guidance_scale=7.5,       # Strength of adherence to prompt
+                    num_inference_steps=50,  # More steps for higher quality
+                    guidance_scale=10,       # Strength of adherence to prompt
                     width=512,
                     height=512,
                     generator=generator
@@ -308,14 +308,18 @@ def main():
     num_images = [21, 13]
     classifications = ["Cancerous", "NotCancerous"]
 
+    # Positive prompts: what the model should generate
+    # Each string describes the desired characteristics of the synthetic histopathology image
     prompts = [
-        "Lung histopathology grayscale image showing malignant nuclei, high detail, realistic, microscopic view",
-        "Lung histopathology grayscale image showing benign nuclei, high detail, realistic, microscopic view"
+    "produce a lung histopathology grayscale image showing adenocarcinoma tumor tissue with malignant nuclei from a 66-year-old male donor.",
+    "produce a lung histopathology grayscale image showing adenocarcinoma tumor tissue with benign nuclei from a 66-year-old male donor."
     ]
 
+    # Negative prompts: features to avoid in the generated image
+    # These discourage unwanted artifacts, unrealistic textures, and common mistakes in synthetic images
     negative_prompts = [
-        "blurry, low quality, distorted, cartoon, drawing, artificial, text, watermark",
-        "blurry, low quality, distorted, cartoon, drawing, artificial, text, watermark"
+    "blurry, out of focus, low resolution, artifacts, cartoon, illustration, 3D render, text, annotations, watermark, distorted, unrealistic texture, poor contrast, overexposed, underexposed, tissue folds, air bubbles, staining artifacts",
+    "blurry, out of focus, low resolution, artifacts, cartoon, illustration, 3D render, text, annotations, watermark, distorted, unrealistic texture, poor contrast, overexposed, underexposed, tissue folds, air bubbles, staining artifacts"
     ]
 
     # --- Load Stable Diffusion + ControlNet pipeline ---

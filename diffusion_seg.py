@@ -97,8 +97,8 @@ def load_dataset(base_dir):
     no_cancer_dir = os.path.join(base_dir, "NotCancerous")
 
     # Create DataLoaders for both classes
-    cancer_loader = DataLoader(SingleClassDataset(cancer_dir, transform), batch_size=21, shuffle=True)
-    no_cancer_loader = DataLoader(SingleClassDataset(no_cancer_dir, transform), batch_size=13, shuffle=True)
+    cancer_loader = DataLoader(SingleClassDataset(cancer_dir, transform), batch_size=4, shuffle=True)
+    no_cancer_loader = DataLoader(SingleClassDataset(no_cancer_dir, transform), batch_size=4, shuffle=True)
 
     return cancer_loader, no_cancer_loader
 
@@ -226,8 +226,8 @@ def train_model(dataloader, num_epochs=500):
             # Step 1: Encode images into latent space using the VAE
             # ------------------------------------------------------------------
             # VAE returns a distribution; we sample from it to get latent vectors
-            # latents = vae.encode(images).latent_dist.sample() * 0.18215  # scaling factor used in Stable Diffusion
-            latents = vae.encode(images).latent_dist.sample()
+            latents = vae.encode(images).latent_dist.sample() * 0.18215  # scaling factor used in Stable Diffusion
+            # latents = vae.encode(images).latent_dist.sample()
 
             # ------------------------------------------------------------------
             # Step 2: Sample random timesteps for the diffusion process
