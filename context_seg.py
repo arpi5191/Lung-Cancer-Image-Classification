@@ -308,26 +308,109 @@ def main():
     num_images = [21, 13]
     classifications = ["Cancerous", "NotCancerous"]
 
-    # Positive prompts: what the model should generate
-    # Each string describes the desired characteristics of the synthetic histopathology image
+    # -----------------------------
+    # Define prompts for each class
+    # -----------------------------
+    base_prompt = (
+        "FFPE lung adenocarcinoma from a male, "
+        "H&E stain grayscale microscopy, "
+    )
+
+    malignant_prompt = (
+        "Malignant cells in irregular glands, "
+        "Enlarged pleomorphic hyperchromatic nuclei, irregular membranes, "
+        "Prominent nucleoli, coarse chromatin, "
+        "High N/C ratio, nuclear crowding and overlap, "
+        "Disorganized architecture, "
+        "Mitotic figures present"
+    )
+
+    benign_prompt = (
+        "Benign cells in intact glands, "
+        "Small uniform normochromatic nuclei, smooth membranes, "
+        "Inconspicuous nucleoli, fine chromatin, "
+        "Normal N/C ratio, evenly spaced nuclei, "
+        "Organized architecture, "
+        "No mitotic figures"
+    )
+
+    # Combined prompts for each class
     prompts = [
-    "produce a lung histopathology grayscale image showing adenocarcinoma tumor tissue with malignant nuclei from a 66-year-old male donor.",
-    "produce a lung histopathology grayscale image showing adenocarcinoma tumor tissue with benign nuclei from a 66-year-old male donor."
+        base_prompt + malignant_prompt,
+        base_prompt + benign_prompt
     ]
 
-    # Negative prompts: features to avoid in the generated image
-    # These discourage unwanted artifacts, unrealistic textures, and common mistakes in synthetic images
+    # -----------------------------
+    # Define negative prompts
+    # -----------------------------
+    base_negative = (
+        "Blurry, low resolution, artifacts, "
+        "Cartoon, illustration, "
+        "Text, watermark, "
+        "Tissue folds, debris, "
+        "Overexposed, underexposed, "
+        "Wrong staining, "
+        "Wrong tissue type"
+    )
+
+    malignant_avoid = (
+        "Small, uniform, round, normochromatic nuclei, "
+        "Evenly spaced and organized nuclear architecture, "
+        "Uniform nuclear size, "
+        "Inconspicuous nucleoli, fine chromatin, smooth nuclear membranes"
+    )
+
+    benign_avoid = (
+        "Enlarged irregular hyperchromatic pleomorphic nuclei, "
+        "Crowded overlapping nuclei, disorganized architecture, "
+        "Variable nuclear size, "
+        "Prominent nucleoli, coarse chromatin, mitotic figures"
+    )
+
     negative_prompts = [
-    "blurry, out of focus, low resolution, artifacts, cartoon, illustration, 3D render, text, annotations, watermark, distorted, unrealistic texture, poor contrast, overexposed, underexposed, tissue folds, air bubbles, staining artifacts",
-    "blurry, out of focus, low resolution, artifacts, cartoon, illustration, 3D render, text, annotations, watermark, distorted, unrealistic texture, poor contrast, overexposed, underexposed, tissue folds, air bubbles, staining artifacts"
+        base_negative + malignant_avoid,
+        base_negative + benign_avoid
     ]
 
-    # --- Load Stable Diffusion + ControlNet pipeline ---
+    # -----------------------------
+    # Load Stable Diffusion pipeline
+    # -----------------------------
     pipe, device = load_model()
 
-    # --- Generate synthetic images ---
-    train_model(pipe, device, output_dir, classifications, prompts, negative_prompts,
-                num_images, loaders)
+    all_prompts = prompts + negative_prompts
+    expected_tokens = 77  # Target token length for prompt validation
+
+    # -----------------------------
+    # Validate token length for all prompts
+    # -----------------------------
+    for i, prompt in enumerate(all_prompts):
+
+        # Encode the prompt into token IDs, truncating if too long, and return as PyTorch tensors
+        text_inputs = pipe.tokenizer(
+            prompt,
+            truncation=True,
+            return_tensors="pt"
+        )
+
+        # Get the number of tokens in the encoded prompt tensor
+        num_tokens = text_inputs.input_ids.shape[1]
+
+        # Decode each token ID back into a string for readability/debugging
+        tokens_decoded = [pipe.tokenizer.decode([tid]).strip() for tid in text_inputs.input_ids[0]]
+
+        # Print which prompt is being validated and how many tokens it has
+        print(f"Prompt {i} validated with {num_tokens} tokens.")
+
+        # Print the decoded tokens so you can inspect the actual token sequence
+        print(tokens_decoded)
+
+        # Print an empty line to separate output for different prompts
+        print()
+
+    # -----------------------------
+    # Generate synthetic images
+    # -----------------------------
+    train_model(pipe, device, output_dir, classifications, prompts, negative_prompts, num_images, loaders)
 
 if __name__ == "__main__":
     main()

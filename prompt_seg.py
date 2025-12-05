@@ -127,26 +127,35 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
 
     print(f"\nAll {sum(num_images)} images saved to {output_dir}")
 
-
 def main():
     """
-    Main function to set up directories, load the model, and generate images.
+    Main function to set up directories, load the Stable Diffusion model,
+    and generate synthetic histopathology images.
 
-    Creates the output directories (removing any existing ones), defines
-    prompts and classes, loads the Stable Diffusion pipeline, and calls
-    the train_model function to generate images.
+    Workflow:
+    1. Determine output directory based on environment (Docker vs local).
+    2. Remove any existing output directory and create fresh directories for each class.
+    3. Define class-specific prompts and negative prompts.
+    4. Load the Stable Diffusion model pipeline.
+    5. Validate prompt token lengths.
+    6. Call train_model() to generate synthetic images.
     """
-    # Determine output directory based on environment
+
+    # -----------------------------
+    # Determine output directory
+    # -----------------------------
     if os.path.exists('/.dockerenv'):
-        output_dir = '/prompt_tif'  # Use this path in Docker environment
+        output_dir = '/prompt_tif'  # Docker environment
     else:
         output_dir = '/ocean/projects/bio240001p/arpitha/prompt_tif'
-        # Alternatively, local path can be used:
+        # Alternative local path:
         # output_dir = '/Users/arpitha/Documents/Lab_Schwartz/code/imgFISH-nick/stardist/prompt_tif'
 
-    # Remove old patch directory if it exists to start fresh
+    # -----------------------------
+    # Reset output directory
+    # -----------------------------
     if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
+        shutil.rmtree(output_dir)  # Delete old directory to start fresh
         print(f"Directory '{output_dir}' has been deleted.")
     os.makedirs(output_dir, exist_ok=True)
     print(f"Directory '{output_dir}' created successfully.")
@@ -157,114 +166,114 @@ def main():
         os.makedirs(path, exist_ok=True)
         print(f"Directory '{path}' was created successfully.")
 
-    # Define number of images to generate per class
-    num_images = [21, 13]
-
-    # Define class labels
+    # -----------------------------
+    # Define image generation parameters
+    # -----------------------------
+    num_images = [21, 13]  # Number of images to generate per class
     classifications = ["Cancerous", "NotCancerous"]
 
-    # SINGLE COMPREHENSIVE PROMPT - Forces maximum consistency
-    # All structural details identical, ONLY nuclear characteristics differ between classes
-
-    # Common structural prompt (shared by both)
+    # -----------------------------
+    # Define prompts for each class
+    # -----------------------------
     base_prompt = (
-        "Formalin fixed paraffin embedded FFPE human lung adenocarcinoma tissue section from a 66-year-old male donor, "
-        "Hematoxylin and eosin H&E histological stain, grayscale monochrome microscopy image, "
-        "Clinical pathology slide preparation suitable for NGS analysis, "
-        "Adenocarcinoma glandular architecture with acinar growth pattern, "
-        "Should consist of either complex branching tubular structures with irregular glandular luminal spaces "
-        "in cross-section, or predominantly tangential epithelial sections characterized by densely packed cells "
-        "and increased nuclear visibility, "
-        "Background lung parenchyma with compressed alveolar structures, "
-        "Moderate to abundant eosinophilic cytoplasm, "
-        "Tissue fixed in 10 percent neutral buffered formalin, standard tissue processing, "
-        "Paraffin infiltration and embedding, microtome sectioned at 4 microns thickness, "
-        "Mounted on glass slide with cover slip, "
-        "Brightfield microscopy, even Köhler illumination, optimal focus plane, "
-        "Professional diagnostic pathology laboratory quality"
+        "FFPE lung adenocarcinoma from a male, "
+        "H&E stain grayscale microscopy, "
     )
 
-    # Cytological and architectural features characteristic of malignant adenocarcinoma
     malignant_prompt = (
-        "Malignant epithelial cells lining distorted or irregular glandular lumens, "
-        "Enlarged pleomorphic hyperchromatic nuclei with irregular nuclear membranes, "
-        "Prominent central nucleoli and coarse, heterogeneous chromatin distribution, "
-        "Increased nuclear-to-cytoplasmic ratio with nuclear crowding and overlap, "
-        "Loss of normal cellular polarity and architectural organization, "
-        "Mitotic figures occasionally visible and apoptotic bodies present"
+        "Malignant cells in irregular glands, "
+        "Enlarged pleomorphic hyperchromatic nuclei, irregular membranes, "
+        "Prominent nucleoli, coarse chromatin, "
+        "High N/C ratio, nuclear crowding and overlap, "
+        "Disorganized architecture, "
+        "Mitotic figures present"
     )
 
-    # Cytological and architectural features characteristic of benign-appearing glandular epithelium
     benign_prompt = (
-        "Benign epithelial cells lining intact glandular lumens, "
-        "Small uniform round normochromatic nuclei with smooth, regular nuclear membranes, "
-        "Inconspicuous nucleoli and a fine, evenly dispersed chromatin pattern, "
-        "Normal nuclear-to-cytoplasmic ratio with evenly spaced nuclei and no crowding, "
-        "Preserved cellular polarity and well-organized glandular architecture, "
-        "No visible mitotic figures and no apoptotic bodies"
+        "Benign cells in intact glands, "
+        "Small uniform normochromatic nuclei, smooth membranes, "
+        "Inconspicuous nucleoli, fine chromatin, "
+        "Normal N/C ratio, evenly spaced nuclei, "
+        "Organized architecture, "
+        "No mitotic figures"
     )
 
-    # Combined prompts for generating malignant and benign-appearing adenocarcinoma images
+    # Combined prompts for each class
     prompts = [
-        base_prompt + malignant_prompt,  # Malignant adenocarcinoma features
-        base_prompt + benign_prompt      # Benign-appearing glandular epithelial features
+        base_prompt + malignant_prompt,
+        base_prompt + benign_prompt
     ]
 
-    # NEGATIVE PROMPTS - Baseline + Class-Specific
-
-    # Shared baseline negative prompt (technical/quality issues)
+    # -----------------------------
+    # Define negative prompts
+    # -----------------------------
     base_negative = (
-        "Blurry, out of focus, soft focus, low resolution, jpeg artifacts, compression artifacts, "
-        "Cartoon, illustration, 3D render, painting, drawing, artistic, sketch, "
-        "Text, labels, annotations, arrows, watermark, signature, scale bar, measurements, "
-        "Multiple magnifications, stitching artifacts, scanning lines, tile boundaries, "
-        "Distorted perspective, warped tissue, tissue folds, wrinkled tissue, tissue tears, "
-        "Air bubbles, dust particles, debris, foreign material, "
-        "Extreme contrast, overexposed, underexposed, washed out, "
-        "Unrealistic colors, fluorescent, neon colors, unnatural staining, "
-        "Photo collage, split screen, borders, frames, multiple images, "
-        "Necrosis, hemorrhage, blood cells, extensive inflammation, "
-        "Calcification, wrong tissue type, different organ, "
-        "Immunohistochemistry, IHC staining, DAB chromogen, special stains, "
-        "Uneven illumination, vignetting, dark corners, microscope reticle, "
-        "Coverslip edge, mounting medium artifacts, knife chatter, processing artifacts"
+        "Blurry, low resolution, artifacts, "
+        "Cartoon, illustration, "
+        "Text, watermark, "
+        "Tissue folds, debris, "
+        "Overexposed, underexposed, "
+        "Wrong staining, "
+        "Wrong tissue type"
     )
 
-    # Class-specific additions to avoid wrong nuclear features
-
-    # For MALIGNANT class: avoid benign/normal nuclear features
     malignant_avoid = (
-        "Small uniform nuclei, regular round nuclei, "
-        "Normochromatic nuclei, pale nuclei, "
-        "Evenly spaced nuclei, orderly nuclear arrangement, "
-        "Maintained cellular polarity, organized architecture, "
-        "Uniform nuclear size, monomorphic nuclei, "
-        "Inconspicuous nucleoli, absent nucleoli, "
-        "Fine chromatin pattern, smooth nuclear membranes"
+        "Small, uniform, round, normochromatic nuclei, "
+        "Evenly spaced and organized nuclear architecture, "
+        "Uniform nuclear size, "
+        "Inconspicuous nucleoli, fine chromatin, smooth nuclear membranes"
     )
 
-    # For BENIGN class: avoid malignant nuclear features
     benign_avoid = (
-        "Enlarged nuclei, irregular nuclei, pleomorphic nuclei, "
-        "Hyperchromatic nuclei, dark nuclei, "
-        "Crowded nuclei, overlapping nuclei, nuclear piling, "
-        "Loss of polarity, disorganized architecture, "
-        "Variable nuclear size, nuclear size variation, "
-        "Prominent nucleoli, multiple nucleoli, enlarged nucleoli, "
-        "Coarse chromatin, irregular nuclear contours, "
-        "Mitotic figures, abnormal mitoses"
+        "Enlarged irregular hyperchromatic pleomorphic nuclei, "
+        "Crowded overlapping nuclei, disorganized architecture, "
+        "Variable nuclear size, "
+        "Prominent nucleoli, coarse chromatin, mitotic figures"
     )
 
-    # Combined negative prompts for generating malignant and benign-appearing adenocarcinoma images
     negative_prompts = [
-        base_negative + malignant_avoid,  # Malignant adenocarcinoma features to avoid
-        base_negative + benign_avoid      # Benign-appearing glandular epithelial features to avoid
+        base_negative + malignant_avoid,
+        base_negative + benign_avoid
     ]
 
-    # Load Stable Diffusion model
+    # -----------------------------
+    # Load Stable Diffusion pipeline
+    # -----------------------------
     pipe, device = load_model()
 
+    all_prompts = prompts + negative_prompts
+    expected_tokens = 77  # Target token length for prompt validation
+
+    # -----------------------------
+    # Validate token length for all prompts
+    # -----------------------------
+    for i, prompt in enumerate(all_prompts):
+
+        # Encode the prompt into token IDs, truncating if too long, and return as PyTorch tensors
+        text_inputs = pipe.tokenizer(
+            prompt,
+            truncation=True,
+            return_tensors="pt"
+        )
+
+        # Get the number of tokens in the encoded prompt tensor
+        num_tokens = text_inputs.input_ids.shape[1]
+
+        # Decode each token ID back into a string for readability/debugging
+        tokens_decoded = [pipe.tokenizer.decode([tid]).strip() for tid in text_inputs.input_ids[0]]
+
+        # Print which prompt is being validated and how many tokens it has
+        print(f"Prompt {i} validated with {num_tokens} tokens.")
+
+        # Print the decoded tokens so you can inspect the actual token sequence
+        print(tokens_decoded)
+
+        # Print an empty line to separate output for different prompts
+        print()
+
+    # -----------------------------
     # Generate synthetic images
+    # -----------------------------
     train_model(pipe, device, output_dir, classifications, prompts, negative_prompts, num_images)
 
 if __name__ == "__main__":
