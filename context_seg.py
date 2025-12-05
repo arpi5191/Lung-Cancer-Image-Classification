@@ -314,24 +314,22 @@ def main():
     base_prompt = (
         "FFPE lung adenocarcinoma from a male, "
         "H&E stain grayscale microscopy, "
+        "Acinar architecture, "
+        "Branching tubular structures or tangential epithelial sections, "
     )
 
     malignant_prompt = (
         "Malignant cells in irregular glands, "
-        "Enlarged pleomorphic hyperchromatic nuclei, irregular membranes, "
+        "Enlarged pleomorphic hyperchromatic nuclei, "
         "Prominent nucleoli, coarse chromatin, "
         "High N/C ratio, nuclear crowding and overlap, "
-        "Disorganized architecture, "
-        "Mitotic figures present"
     )
 
     benign_prompt = (
         "Benign cells in intact glands, "
-        "Small uniform normochromatic nuclei, smooth membranes, "
+        "Small uniform normochromatic nuclei, "
         "Inconspicuous nucleoli, fine chromatin, "
         "Normal N/C ratio, evenly spaced nuclei, "
-        "Organized architecture, "
-        "No mitotic figures"
     )
 
     # Combined prompts for each class
