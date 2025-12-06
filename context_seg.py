@@ -312,8 +312,7 @@ def main():
     # Define prompts for each class
     # -----------------------------
     base_prompt = (
-        "FFPE lung adenocarcinoma from a male, "
-        "H&E stain grayscale microscopy, "
+        "FFPE lung adenocarcinoma grayscale microscopy from a male, "
         "Acinar architecture, "
         "Branching tubular structures or tangential epithelial sections, "
     )
@@ -343,11 +342,10 @@ def main():
     # -----------------------------
     base_negative = (
         "Blurry, low resolution, artifacts, "
-        "Cartoon, illustration, "
+        "Cartoon, illustration, annotation, letters"
         "Text, watermark, "
         "Tissue folds, debris, "
         "Overexposed, underexposed, "
-        "Wrong staining, "
         "Wrong tissue type"
     )
 
