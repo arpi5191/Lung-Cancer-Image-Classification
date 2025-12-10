@@ -1,41 +1,33 @@
-# Import necessary packages
 import json
 import argparse
 import numpy as np
 from scipy.stats import wilcoxon
 
 def main():
-    # Set up command-line argument parser
-    parser = argparse.ArgumentParser()
-
-    # Define required command-line arguments:
-    # --original: JSON string list of accuracies from original patch tests
-    # --voronoi: JSON string list of accuracies from Voronoi patch tests
-    parser.add_argument('--original', required=True, help='JSON list of accuracies from original patch')
-    parser.add_argument('--voronoi', required=True, help='JSON list of accuracies from Voronoi patch')
-
     # Parse arguments
+    parser = argparse.ArgumentParser(description="Perform Wilcoxon signed-rank test between two patch datasets.")
+    parser.add_argument('--type1', required=True, help='JSON list of accuracies from patch type 1')
+    parser.add_argument('--type2', required=True, help='JSON list of accuracies from patch type 2')
     args = parser.parse_args()
 
-    # Convert JSON strings to Python lists of floats for statistical testing
-    original = list(map(float, json.loads(args.original)))
-    voronoi = list(map(float, json.loads(args.voronoi)))
+    # Convert JSON strings to Python lists of floats
+    data1 = list(map(float, json.loads(args.type1)))
+    data2 = list(map(float, json.loads(args.type2)))
 
-    # Compute and print median for both datasets
-    original_median = np.median(original)
-    voronoi_median = np.median(voronoi)
-    print(f"Original median accuracy: {original_median}")
-    print(f"Voronoi median accuracy: {voronoi_median}")
-    print()
+    # Compute and print medians
+    median1 = np.median(data1)
+    median2 = np.median(data2)
+    print(f"Type 1 median accuracy: {median1}")
+    print(f"Type 2 median accuracy: {median2}")
 
-    # Perform Wilcoxon signed-rank test to compare paired samples
-    stat, p_value = wilcoxon(original, voronoi)
+    # Perform Wilcoxon signed-rank test
+    stat, p_value = wilcoxon(data1, data2)
 
-    # Print significance result based on p-value threshold 0.05
+    # Print significance
     if p_value < 0.05:
-        print("Statistically significant (p < 0.05).")
+        print("Statistically significant difference (p < 0.05).")
     else:
-        print("Not statistically significant (p >= 0.05).")
+        print("No statistically significant difference (p >= 0.05).")
 
 if __name__ == "__main__":
     main()
