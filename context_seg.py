@@ -57,25 +57,35 @@ class SingleClassDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         """
-        Load an image and apply transformations if specified.
+        Load a single image from disk, apply preprocessing transforms,
+        and return its index, image tensor, and filename.
+
+        This method enables traceability between generated synthetic images
+        and their original conditioning templates when used with ControlNet.
 
         Args:
-            idx (int): Index of the image to load.
+            idx (int): Index of the image to load from the dataset.
 
         Returns:
-            tuple: (idx, image_tensor)
-                - idx: the index of the image (useful for tracking or debugging)
-                - image_tensor: the transformed image ready for model input
+            tuple:
+                idx (int): Index of the image in the dataset (useful for debugging or logging).
+                image_tensor (torch.Tensor): Transformed image tensor ready for model input.
+                filename (str): Basename of the source image file, used for provenance tracking.
         """
-        # Open the image and convert it to RGB (even if grayscale or multi-channel TIFF)
-        img = Image.open(self.files[idx]).convert("RGB")
+        # Retrieve full path to the image
+        img_path = self.files[idx]
 
-        # Apply the transformations (resize, normalize, etc.) if provided
+        # Load image and convert to RGB (ensures consistent channel format)
+        img = Image.open(img_path).convert("RGB")
+
+        # Apply preprocessing transformations (resize, normalize, etc.)
         if self.transform:
             img = self.transform(img)
 
-        # Return both the index and the image tensor
-        return idx, img
+        # Extract filename for logging and traceability
+        filename = os.path.basename(img_path)
+
+        return idx, img, filename
 
 def load_dataset(base_dir):
     """
@@ -99,8 +109,8 @@ def load_dataset(base_dir):
     no_cancer_dir = os.path.join(base_dir, "NotCancerous")
 
     # Create DataLoaders
-    cancer_loader = DataLoader(SingleClassDataset(cancer_dir, transform), batch_size=21, shuffle=True)
-    no_cancer_loader = DataLoader(SingleClassDataset(no_cancer_dir, transform), batch_size=13, shuffle=True)
+    cancer_loader = DataLoader(SingleClassDataset(cancer_dir, transform), batch_size=21, shuffle=False)
+    no_cancer_loader = DataLoader(SingleClassDataset(no_cancer_dir, transform), batch_size=13, shuffle=False)
 
     return cancer_loader, no_cancer_loader
 
@@ -120,6 +130,7 @@ def load_model():
     """
     # Model identifiers
     model_id = "Nihirc/Prompt2MedImage"
+    # controlnet_id = "lllyasviel/sd-controlnet-depth"
     controlnet_id = "lllyasviel/sd-controlnet-seg"
 
     # Auto-detect device
@@ -198,21 +209,40 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
         for img_idx in range(num_images[class_idx]):
             print(f"\n[{img_idx+1}/{num_images[class_idx]}] Generating image...")
 
-            # --- Get Conditioning Image for ControlNet ---
+            # -----------------------------------------
+            # Retrieve a batch for ControlNet conditioning
+            # -----------------------------------------
             try:
-                _, batch_images = next(data_iter)
+                # Attempt to get the next batch from the DataLoader
+                _, batch_images, batch_filenames = next(data_iter)
             except StopIteration:
-                # Reset iterator if dataset exhausted
+                # If the iterator is exhausted, reinitialize it
+                # This allows cycling through the dataset when
+                # num_images > dataset size
                 data_iter = iter(loaders[class_idx])
-                _, batch_images = next(data_iter)
+                _, batch_images, batch_filenames = next(data_iter)
 
-            # Pick first image from batch
-            conditioning_image = batch_images[0]
+            # -----------------------------------------
+            # Select a single conditioning image
+            # -----------------------------------------
+            # Cycle through images inside the batch so filenames change
+            batch_size = batch_images.shape[0]
+            j = img_idx % batch_size
 
-            # Convert tensor to PIL and denormalize for ControlNet
-            conditioning_image = (conditioning_image + 1) / 2  # [-1,1] -> [0,1]
+            conditioning_image = batch_images[j]
+            conditioning_filename = batch_filenames[j]
+
+            # -----------------------------------------
+            # Prepare conditioning image for ControlNet
+            # -----------------------------------------
+            # Undo normalization: convert from [-1, 1] back to [0, 1]
+            conditioning_image = (conditioning_image + 1) / 2
+
+            # Convert tensor to PIL Image (ControlNet expects PIL input)
             conditioning_image = transforms.ToPILImage()(conditioning_image)
-            conditioning_image = conditioning_image.resize((512, 512))  # Match pipeline input
+
+            # Ensure image resolution matches Stable Diffusion input size
+            conditioning_image = conditioning_image.resize((512, 512))
 
             # Set reproducible seed
             generator = torch.Generator(device=device).manual_seed(42 + img_idx)
@@ -223,9 +253,9 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
                     prompt=prompts[class_idx],
                     negative_prompt=negative_prompts[class_idx],
                     image=conditioning_image,  # ControlNet guidance
-                    controlnet_conditioning_scale=0.8,  # Strength of ControlNet influence
-                    num_inference_steps=50,  # More steps for higher quality
-                    guidance_scale=10,       # Strength of adherence to prompt
+                    controlnet_conditioning_scale=1.3,  # Strength of ControlNet influence
+                    num_inference_steps=100,  # More steps for higher quality
+                    guidance_scale=7,       # Strength of adherence to prompt
                     width=512,
                     height=512,
                     generator=generator
@@ -234,7 +264,8 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
             # --- Post-processing ---
             image = result.images[0]
             image = image.resize((2048, 2048), Image.Resampling.LANCZOS)
-            image = image.convert("L")  # Convert to grayscale
+            image = image.convert("1")  # Convert to 1-bit black and white
+
 
             # --- Save image ---
             class_dir = os.path.join(output_dir, classifications[class_idx])
@@ -247,6 +278,9 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
             image_array = np.array(image)
             tifffile.imwrite(filepath, image_array)
             print(f"Saved to: {filepath}")
+
+            # Log template → generated mapping for traceability
+            print(f"Template → Generated | {conditioning_filename} → {image_name}.tif")
 
             # Clear memory after each image
             if torch.cuda.is_available():
@@ -312,49 +346,27 @@ def main():
     # Define prompts for each class
     # -----------------------------
     base_prompt = (
-        "FFPE lung adenocarcinoma grayscale H&E microscopy, "
-        "Acinar glandular architecture"
+        "FFPE lung adenocarcinoma grayscale microscopy from a male, "
+        "Acinar architecture, "
     )
 
     malignant_prompt = (
-        "Variable cellularity from dense to sparse with irregular gland sizes, "
-        "Mix of round cross-sections and elongated tubular profiles, "
-        "Variable stromal background, scattered widely separated structures, "
-        "Loss of tissue cohesion and organized pattern, "
-        "Enlarged hyperchromatic pleomorphic nuclei, "
-        "Prominent nucleoli with coarse chromatin, "
-        "Nuclear crowding and high N/C ratio"
+        "Malignant cells in irregular glands, "
+        "Most images show tangential epithelial sections,"
+        "Rarely, images have branching tubular structures with open lumens"
+        "Enlarged pleomorphic hyperchromatic nuclei, "
+        "Prominent nucleoli, "
+        "High N/C ratio and nuclear crowding"
     )
 
     benign_prompt = (
-        "Mixed cellularity with cohesive central glandular clusters, "
-        "Peripheral scattered structures with variable stromal spacing, "
-        "Mix of round and elongated gland profiles, "
-        "Maintained organized central architecture, "
-        "Clear luminal spaces with visible gland structure, "
+        "Benign cells in intact glands, "
+        "Branching tubular structures with open lumens, "
+        "Nuclei lining the lumen periphery, "
         "Small uniform normochromatic nuclei, "
-        "Fine chromatin with inconspicuous nucleoli"
+        "Inconspicuous nucleoli,"
+        "Normal N/C ratio"
     )
-
-    # malignant_prompt = (
-    #     "Irregular glandular architecture with variable cellularity, "
-    #     "Mix of round cross-sections and elongated tubular profiles, "
-    #     "Loss of organized tissue pattern, "
-    #     "Enlarged hyperchromatic pleomorphic nuclei, "
-    #     "Prominent nucleoli with coarse chromatin, "
-    #     "Nuclear crowding and overlap, "
-    #     "High nuclear-cytoplasmic ratio"
-    # )
-    #
-    # benign_prompt = (
-    #     "Cohesive central glandular clusters with peripheral scattered structures, "
-    #     "Mix of round and elongated gland profiles, "
-    #     "Maintained overall tissue organization, "
-    #     "Clear luminal spaces with visible gland architecture, "
-    #     "Small uniform normochromatic nuclei, "
-    #     "Fine chromatin with inconspicuous nucleoli, "
-    #     "Normal nuclear-cytoplasmic ratio"
-    # )
 
     # Combined prompts for each class
     prompts = [
@@ -367,10 +379,9 @@ def main():
     # -----------------------------
     base_negative = (
         "Blurry, low resolution, artifacts, "
-        "Cartoon, illustration, annotation, letters"
-        "Text, watermark, "
+        "Cartoon, illustration, drawing, sketch, "
+        "Annotation, letters, text, watermark, "
         "Tissue folds, debris, "
-        "Overexposed, underexposed, "
         "Wrong tissue type"
     )
 
