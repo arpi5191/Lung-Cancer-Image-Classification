@@ -255,7 +255,7 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
                     image=conditioning_image,  # ControlNet guidance
                     controlnet_conditioning_scale=1.3,  # Strength of ControlNet influence
                     num_inference_steps=100,  # More steps for higher quality
-                    guidance_scale=7,       # Strength of adherence to prompt
+                    guidance_scale=6,       # Strength of adherence to prompt
                     width=512,
                     height=512,
                     generator=generator
@@ -353,18 +353,15 @@ def main():
     malignant_prompt = (
         "Malignant cells in irregular glands, "
         "Most images show tangential epithelial sections,"
-        "Rarely, images have branching tubular structures with open lumens"
+        "Rarely, images have branching tubular structures with open lumens, nuclei localized along the lumen periphery, "
         "Enlarged pleomorphic hyperchromatic nuclei, "
-        "Prominent nucleoli, "
-        "High N/C ratio and nuclear crowding"
+        "High N/C ratio"
     )
 
     benign_prompt = (
         "Benign cells in intact glands, "
-        "Branching tubular structures with open lumens, "
-        "Nuclei lining the lumen periphery, "
+        "Branching tubular structures with open lumens, nuclei localized along the lumen periphery, "
         "Small uniform normochromatic nuclei, "
-        "Inconspicuous nucleoli,"
         "Normal N/C ratio"
     )
 
