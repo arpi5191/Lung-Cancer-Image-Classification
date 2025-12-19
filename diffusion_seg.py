@@ -100,9 +100,9 @@ def load_dataset(base_dir):
 
     # Create DataLoaders with shuffle=True for random batching
     cancer_loader = DataLoader(SingleClassDataset(cancer_dir, transform),
-                               batch_size=6, shuffle=True)
+                               batch_size=7, shuffle=True)
     no_cancer_loader = DataLoader(SingleClassDataset(no_cancer_dir, transform),
-                                  batch_size=6, shuffle=True)
+                                  batch_size=7, shuffle=True)
 
     return cancer_loader, no_cancer_loader
 
@@ -140,7 +140,7 @@ def load_model():
         sample_size=32,  # spatial size of latent
         in_channels=4,  # latent channels
         out_channels=4,  # latent channels output
-        layers_per_block=4,
+        layers_per_block=6,
         block_out_channels=(128, 256, 512, 512),
         down_block_types=("DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D"),
         up_block_types=("UpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D"),
@@ -151,7 +151,7 @@ def load_model():
     # Scheduler for training (used for adding noise during forward diffusion)
     scheduler = DDIMScheduler(
         beta_start=0.00085,
-        beta_end=0.03,
+        beta_end=0.05,
         beta_schedule="scaled_linear",
         num_train_timesteps=1000
     )
@@ -317,7 +317,7 @@ def generate_synthetic(num_images: int, classification, output_dir, class_label=
             # ------------------------------
             gen_scheduler = DDIMScheduler(
                 beta_start=0.00085,
-                beta_end=0.03,
+                beta_end=0.05,
                 beta_schedule="scaled_linear",
                 num_train_timesteps=1000
             )
@@ -470,3 +470,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
