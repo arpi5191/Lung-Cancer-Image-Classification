@@ -15,6 +15,6 @@ If CNN classification performance on the synthetic images proves equal to or bet
 4) tumor_seg.py: Applies preprocessing techniques to the original lung histopathology image dataset.
 5) voronoi_seg.py: Generates a voronoi diagram dataset from the preprocessed lung histopathology images
 7) diffusion_seg.py: Generates a synthetic dataset by training a latent diffusion model on the preprocessed lung histopathology images.
-8) prompt_seg.py: Generates a synthetic dataset by fine-tuning a Stable Diffusion pipeline
-9)
-10) 
+8) prompt_seg.py: Generates a synthetic dataset by fine-tuning a Stable Diffusion pipeline using prompt engineering and LoRA/DoRA.
+9) context_seg.py: Generates a synthetic dataset by fine-tuning a Stable Diffusion pipeline using context engineering and LoRA/DoRA.
+10) extract_patches.py: Segments images in a dataset for input into the CNN model.
