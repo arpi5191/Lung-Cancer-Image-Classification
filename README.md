@@ -1,6 +1,6 @@
 # Lung-Cancer-Image-Classification
 
-## Project-Overview
+## Project Overview
 
 A major challenge in medical research is the scarcity of imaging data. This project investigates whether synthetic images can serve as effective substitutes for real and spatially segmented images by comparing their cancer classification performance using a convolutional neural network (CNN).
 
