@@ -9,5 +9,5 @@ An HPC machine learning pipeline has been developed that sets up the environment
 If the CNN cancer classification performance on the synthetic datasets were equal to or better than that on the real and spatially segmented datasets, then synthetic images could potentially serve as an effective substitute in the absence of sufficient medical imaging data. This is a work in progress, and more details, results, and updates will be added to the README in future revisions.
 
 ## File Descriptions
-1) \textbf{run\_pipeline.slurm}: Executes the machine learning pipeline. It sets up the environment, generates datasets, and preprocesses them. It then performs CNN cancer classification comparisons using compare_models.sh.
+1) \textbf{\texttt{run\_pipeline.slurm}}: Executes the machine learning pipeline. It sets up the environment, generates datasets, and preprocesses them. It then performs CNN cancer classification comparisons using compare_models.sh.
 2) 
