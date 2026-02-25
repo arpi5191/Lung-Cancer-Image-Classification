@@ -1,4 +1,4 @@
-# Lung-Cancer-Image-Classification
+# Lung Cancer Image Classification
 
 ## Project Overview
 
