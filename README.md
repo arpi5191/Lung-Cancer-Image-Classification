@@ -13,6 +13,7 @@ An additional aim was to explore whether nuclei features alone could predict mal
 This is a work in progress — results and further details will be added in future revisions.
 
 ## File Descriptions
+
 1) run_pipeline.slurm: Executes the machine learning pipeline. It sets up the environment, generates datasets, and preprocesses them. It then performs CNN cancer classification comparisons using compare_models.sh.
 2) requirements.txt: Contains the packages that must be installed to set up the environment.
 3) tumor_seg.py: Applies preprocessing techniques to the original lung histopathology image dataset.
@@ -26,3 +27,12 @@ This is a work in progress — results and further details will be added in futu
 12) ResNetModel_local.py: Runs the CNN model on a specified dataset and returns the cancer classification test accuracy, executed on a local environment.
 13) wilcoxon_test.py: Runs the Wilcoxon rank-sum test on a pair of cancer classification accuracies, returning the p-value.
 14) voronoi.py: Generates Voronoi regions, extracts features from them, and applies traditional machine learning classifiers to classify tissue samples as malignant.
+
+## Usage
+
+To run the machine learning pipeline, execute run_pipeline.slurm in a high-performance computing environment. The results can be viewed in resnet_out.txt.
+
+## References
+
+1) https://github.com/CMUSchwartzLab/imgFISH/tree/nick/stardist
+2) https://github.com/CMUSchwartzLab/ExPath-CNN/tree/main
