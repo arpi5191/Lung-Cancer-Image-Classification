@@ -1,5 +1,5 @@
 # Import packages
- # Core Python
+# Core Python
 import os
 import time
 import random
@@ -31,6 +31,9 @@ from torch.utils.data.sampler import SubsetRandomSampler, WeightedRandomSampler
 import torchvision
 from torchvision import transforms, datasets, models
 
+# Scikit-learn metrics
+from sklearn.metrics import precision_score, recall_score, f1_score
+
 # Define the global variables for feature dimension, number of classes, and activation
 global feature_dim
 global num_classes
@@ -44,6 +47,15 @@ num_classes = 2
 
 # Dictionary to store activations (output features) of specific layers during the forward pass
 activation = {}
+
+# Set a random seed for full reproducibility
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 def get_patch_files(patches_dir, image_patches, total_image_count):
     """
@@ -301,7 +313,7 @@ def sampler(dataset, count, size=1000):
 
     return weighted_sampler
 
-def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=32):
+def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=8):
     """
     Split image patches into training, validation, and test sets, then create DataLoaders.
 
@@ -362,9 +374,6 @@ def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio
             test_dirs.append(image_path)
 
     print("Current counts -> Train: {}, Validation: {}, Test: {}".format(cur_train_count, cur_val_count, cur_test_count))
-
-    # Create the directory structure again if needed (safe call)
-    create_data_directories()
 
     # Copy image files into their respective directories for each split
     copy_directories_to_directories(train_dir, train_dirs)
@@ -448,7 +457,7 @@ class ModelEmbedding(nn.Module):
         embedding_out = self.relu(self.linear(embedding))
 
         # Compute classification output from original embedding features
-        out = self.finlinear(embedding)
+        out = self.finlinear(embedding_out)
 
         # Return embeddings and classification output
         return embedding_out, out
@@ -472,7 +481,7 @@ def load_model():
     """
 
     # Load pretrained ResNet34 model
-    model = models.resnet34(pretrained=True)
+    model = models.resnet18(pretrained=True)
 
     # Modify first conv layer for grayscale input (1 channel)
     model.conv1 = nn.Conv2d(
@@ -557,7 +566,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-5, momentum=0.70, facto
     return criterion, optimizer, scheduler
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=100, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=45, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
     """
     Trains the model over multiple epochs, tracking training and validation metrics.
@@ -586,22 +595,25 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
     # Set model to training mode (enables dropout, batchnorm updates, etc.)
     model.train()
 
-    # Initialize counters for correct predictions and total samples processed
-    total = 0
-    accuracy = 0
-
-    # Lists to store batch-wise embeddings and losses during training
-    train_embeddings = []
-    train_loss = []
-
-    # Initialize confusion matrix for training data (num_classes should be globally defined)
-    train_confusion_matrix = torch.zeros(num_classes, num_classes)
-
     # Loop over each epoch
     for epoch in range(start_epoch, num_epochs):
-        avg_loss = 0.0  # Running average loss over batches
-        losses = []
-        accuracies = []
+
+        # ── Reset all counters at the start of each epoch ─────────────────────
+        # BUG FIX: in the original code, `total` and `accuracy` were declared
+        # outside the epoch loop, causing them to accumulate across all epochs
+        # instead of reflecting only the current epoch's performance.
+        total = 0
+        accuracy = 0
+        epoch_train_loss = []   # Loss values for this epoch only
+        train_embeddings = []   # Embeddings for this epoch only
+        avg_loss = 0.0          # Running avg for periodic batch-level printing
+
+        # Collect all true labels and predictions this epoch for sklearn metrics
+        all_labels = []
+        all_preds  = []
+
+        # Reset confusion matrix each epoch
+        train_confusion_matrix = torch.zeros(num_classes, num_classes)
 
         # Iterate over batches from training DataLoader
         for batch_num, (feats, labels) in enumerate(train_loader):
@@ -625,6 +637,10 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
             for t, p in zip(labels.view(-1), pred_labels):
                 train_confusion_matrix[t.long(), p.long()] += 1
 
+            # Accumulate labels and predictions (moved to CPU) for sklearn metrics at epoch end
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(pred_labels.cpu().numpy())
+
             # Extract embeddings from model's stored activations (if available)
             if 'avg_pool' in activation:
                 train_embeddings.append(activation['avg_pool'].detach().cpu().numpy())
@@ -641,27 +657,20 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
             # Calculate number of correct predictions in this batch
             curr_accuracy = torch.sum(torch.eq(pred_labels, labels)).item()
 
-            # Update running totals
+            # Update running totals for this epoch only
             accuracy += curr_accuracy
             total += len(labels)
 
-            # Record batch loss (repeated for each sample in batch)
-            train_loss.extend([loss.item()] * feats.size(0))
+            # Record batch loss (one entry per sample in the batch)
+            epoch_train_loss.extend([loss.item()] * feats.size(0))
 
-            # Accumulate batch loss for averaging
+            # Accumulate batch loss for periodic printing
             avg_loss += loss.item()
 
             # Print average loss every 8 batches for monitoring
             if (batch_num + 1) % 8 == 0:
-              print(f'Training Epoch: {epoch + 1}\tBatch: {batch_num + 1}\tAvg-Loss: {avg_loss / 8:.4f}')
-
-              # Print GPU usage info
-              # print(f"GPU Memory Allocated (MB): {torch.cuda.memory_allocated()/1024**2:.2f}")
-              # print(f"GPU Memory Reserved  (MB): {torch.cuda.memory_reserved()/1024**2:.2f}")
-              # print(f"CUDA current device: {torch.cuda.current_device()}")
-              # print(f"GPU name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
-
-              avg_loss = 0.0  # Reset average loss after printing
+                print(f'Training Epoch: {epoch + 1}\tBatch: {batch_num + 1}\tAvg-Loss: {avg_loss / 8:.4f}')
+                avg_loss = 0.0  # Reset average loss after printing
 
             # Clear unused GPU memory to prevent leaks
             torch.cuda.empty_cache()
@@ -669,39 +678,58 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
             # Explicitly delete variables to free memory
             del feats, labels, loss, outputs
 
-        # Print confusion matrix and per-class accuracy for training data
-        print("Training Confusion Matrix:\n", train_confusion_matrix)
-        print("Training Normalized Confusion Matrix (per-class accuracy):\n",
-              train_confusion_matrix.diag() / train_confusion_matrix.sum(1))
+        # Compute per-epoch average training loss and accuracy
+        avg_train_loss = np.mean(epoch_train_loss) if len(epoch_train_loss) > 0 else 0.0
+        avg_train_acc  = accuracy / total if total > 0 else 0.0
 
-        # Compute average training loss and accuracy over entire epoch
-        avg_train_loss = np.mean(train_loss) if len(train_loss) > 0 else 0
-        avg_train_acc = accuracy / total if total > 0 else 0
+        # Compute macro precision, recall, and F1 using scikit-learn
+        train_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+        train_recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+        train_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
         # Append current epoch metrics to overall lists
         all_train_embeddings.extend(train_embeddings)
         all_train_loss.append(avg_train_loss)
         all_train_acc.append(avg_train_acc)
 
-        print(f'Epoch {epoch + 1} - Average Training Loss: {avg_train_loss:.4f}, Average Training Accuracy: {avg_train_acc:.4f}')
+        # Print training metrics
+        print(f'Epoch {epoch + 1} - Avg Training Loss: {avg_train_loss:.4f} | '
+              f'Accuracy: {avg_train_acc:.4f} | Precision: {train_precision:.4f} | '
+              f'Recall: {train_recall:.4f} | F1: {train_f1:.4f}')
+
+        # Print confusion matrix and per-class accuracy for training data
+        print("Training Confusion Matrix:\n", train_confusion_matrix)
+        print("Training Normalized Confusion Matrix (per-class accuracy):\n",
+              train_confusion_matrix.diag() / train_confusion_matrix.sum(1))
+
+        # Blank line for readability
+        print()
 
         # Validate the model on validation dataset and collect metrics
-        val_confusion_matrix, val_embeddings, val_loss, val_acc = testing(model, device, val_loader, criterion)
+        val_confusion_matrix, val_embeddings, val_loss, val_acc, val_precision, val_recall, val_f1 = testing(
+            model, device, val_loader, criterion
+        )
 
         # Append validation metrics to overall lists
         all_val_embeddings.extend(val_embeddings)
         all_val_loss.append(val_loss)
         all_val_acc.append(val_acc)
 
+        # Print validation metrics
+        print(f'Epoch {epoch + 1} - Avg Validation Loss: {val_loss:.4f} | '
+              f'Accuracy: {val_acc:.4f} | Precision: {val_precision:.4f} | '
+              f'Recall: {val_recall:.4f} | F1: {val_f1:.4f}')
+
         # Print validation confusion matrix and per-class accuracy
         print("Validation Confusion Matrix:\n", val_confusion_matrix)
         print("Validation Normalized Confusion Matrix (per-class accuracy):\n",
               val_confusion_matrix.diag() / val_confusion_matrix.sum(1))
 
-        print(f'Epoch {epoch + 1} - Average Validation Loss: {val_loss:.4f}, Average Validation Accuracy: {val_acc:.4f}')
-        print()  # Blank line for readability
+        # Blank lines for readability
+        print()
+        print()
 
-        # Step learning rate scheduler based on validation accuracy if scheduler provided
+        # Step learning rate scheduler based on validation loss if scheduler provided
         if scheduler is not None:
             scheduler.step(val_loss)
 
@@ -710,20 +738,23 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
 
 def testing(model, device, val_loader, criterion):
     """
-    Evaluate the model on the validation dataset.
+    Evaluate the model on a dataset (validation or test).
 
     Args:
         model (torch.nn.Module): The model to evaluate.
         device (torch.device): Device to run computations on (CPU or GPU).
-        val_loader (DataLoader): DataLoader for the validation dataset.
-        criterion (nn.Module): Loss function to calculate validation loss.
+        val_loader (DataLoader): DataLoader for the dataset to evaluate.
+        criterion (nn.Module): Loss function to calculate loss.
 
     Returns:
         tuple:
-            - val_confusion_matrix (torch.Tensor): Confusion matrix for validation predictions.
-            - val_embeddings (list): List of extracted embeddings from validation data.
-            - val_loss (float): Average loss over the validation dataset.
-            - val_acc (float): Average accuracy over the validation dataset.
+            - val_confusion_matrix (torch.Tensor): Confusion matrix for predictions.
+            - val_embeddings (list): List of extracted embeddings from the data.
+            - val_loss (float): Average loss over the dataset.
+            - val_acc (float): Accuracy over the dataset.
+            - precision (float): Macro-averaged precision (sklearn).
+            - recall (float): Macro-averaged recall (sklearn).
+            - f1 (float): Macro-averaged F1 score (sklearn).
     """
 
     # Set model to evaluation mode (disables dropout, batchnorm updates)
@@ -734,49 +765,64 @@ def testing(model, device, val_loader, criterion):
     test_loss = []       # List to store batch-wise losses
     val_embeddings = []  # List to collect embeddings
 
+    # Collect all true labels and predictions for sklearn metrics
+    all_labels = []
+    all_preds  = []
+
     # Initialize confusion matrix of size [num_classes x num_classes]
     val_confusion_matrix = torch.zeros(num_classes, num_classes)
 
-    # Iterate through batches of validation data
-    for batch_num, (feats, labels) in enumerate(val_loader):
-        # Reshape input to match model's expected input shape
-        feats = feats.reshape(-1, 1, feature_dim, feature_dim)
-        feats, labels = feats.to(device), labels.to(device)
+    # Disable gradient computation for efficiency during evaluation
+    with torch.no_grad():
+        # Iterate through batches of validation/test data
+        for batch_num, (feats, labels) in enumerate(val_loader):
+            # Reshape input to match model's expected input shape
+            feats = feats.reshape(-1, 1, feature_dim, feature_dim)
+            feats, labels = feats.to(device), labels.to(device)
 
-        # Forward pass to get model outputs
-        _, outputs = model(feats)
+            # Forward pass to get model outputs
+            _, outputs = model(feats)
 
-        # Predict labels by taking the class with max softmax score
-        _, pred_labels = torch.max(F.softmax(outputs, dim=1), 1)
-        pred_labels = pred_labels.view(-1)
+            # Predict labels by taking the class with max softmax score
+            _, pred_labels = torch.max(F.softmax(outputs, dim=1), 1)
+            pred_labels = pred_labels.view(-1)
 
-        # Update confusion matrix counts
-        for t, p in zip(labels.view(-1), pred_labels):
-            val_confusion_matrix[t.long(), p.long()] += 1
+            # Update confusion matrix counts
+            for t, p in zip(labels.view(-1), pred_labels):
+                val_confusion_matrix[t.long(), p.long()] += 1
 
-        # Extract embeddings if available in activation dict
-        if 'avg_pool' in activation:
-            val_embeddings.append(activation['avg_pool'].detach().cpu().numpy())
+            # Accumulate labels and predictions (moved to CPU) for sklearn metrics
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(pred_labels.cpu().numpy())
 
-        # Calculate batch loss
-        loss = criterion(outputs, labels.long())
-        test_loss.extend([loss.item()] * feats.size()[0])  # Append loss for each sample
+            # Extract embeddings if available in activation dict
+            if 'avg_pool' in activation:
+                val_embeddings.append(activation['avg_pool'].detach().cpu().numpy())
 
-        # Count correct predictions in batch
-        accuracy += torch.sum(torch.eq(pred_labels, labels)).item()
-        total += len(labels)
+            # Calculate batch loss
+            loss = criterion(outputs, labels.long())
+            test_loss.extend([loss.item()] * feats.size()[0])
 
-        # Free memory by deleting unused variables
-        del feats, outputs, labels, loss, pred_labels
+            # Count correct predictions in batch
+            accuracy += torch.sum(torch.eq(pred_labels, labels)).item()
+            total += len(labels)
+
+            # Free memory by deleting unused variables
+            del feats, outputs, labels, loss, pred_labels
 
     # Switch model back to training mode after evaluation
     model.train()
 
-    # Compute average validation loss and accuracy
-    val_loss = np.mean(test_loss) if len(test_loss) > 0 else 0
-    val_acc = accuracy / total if total > 0 else 0
+    # Compute average loss and accuracy
+    val_loss = np.mean(test_loss) if len(test_loss) > 0 else 0.0
+    val_acc  = accuracy / total if total > 0 else 0.0
 
-    return val_confusion_matrix, val_embeddings, val_loss, val_acc
+    # Compute macro precision, recall, and F1 using scikit-learn
+    val_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+    val_recall    = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+    val_f1        = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+
+    return val_confusion_matrix, val_embeddings, val_loss, val_acc, val_precision, val_recall, val_f1
 
 def create_results_directories():
     """
@@ -998,22 +1044,20 @@ def main():
 
     # If multiple GPUs are available, print details about each one
     if torch.cuda.device_count() > 1:
-     print("GPU Details:")
-     # Loop through each GPU and print its index and name
-     for i in range(torch.cuda.device_count()):
-        print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+        print("GPU Details:")
+        # Loop through each GPU and print its index and name
+        for i in range(torch.cuda.device_count()):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
 
     # Get hook function to capture embeddings from 'avg_pool' layer
     hook_function = get_activation('avg_pool', activation)
 
     # Register hook on the model's specific layer to capture features during forward pass
-    # model.features[8].register_forward_hook(hook_function)
-
     # Access the underlying model when using DataParallel
     if torch.cuda.device_count() > 1:
-      model.module.features[8].register_forward_hook(hook_function)
+        model.module.features[8].register_forward_hook(hook_function)
     else:
-      model.features[8].register_forward_hook(hook_function)
+        model.features[8].register_forward_hook(hook_function)
 
     # Setup loss criterion, optimizer, and scheduler for training
     criterion, optimizer, scheduler = get_params(model)
@@ -1032,10 +1076,12 @@ def main():
         model, device, train_loader, val_loader, criterion, optimizer, scheduler
     )
 
-    # Test the model on the test dataset and collect metrics
-    test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc = testing(model, device, test_loader, criterion)
+    # Test the model on the test dataset and collect metrics (now returns precision, recall, f1 too)
+    test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc, test_precision, test_recall, test_f1 = testing(
+        model, device, test_loader, criterion
+    )
 
-    # Record time immediately after training finishes
+    # Record time immediately after training and testing finishes
     mid_time2 = time.time()
 
     # Calculate the total training time
@@ -1044,13 +1090,15 @@ def main():
     # Print the training time in seconds
     print("Training Time: {:.2f} seconds".format(training_time))
 
+    # Print all test metrics including precision, recall, and F1
+    print(f'Average Testing Loss: {all_test_loss:.4f} | '
+          f'Accuracy: {all_test_acc:.4f} | Precision: {test_precision:.4f} | '
+          f'Recall: {test_recall:.4f} | F1: {test_f1:.4f}')
+
     # Print confusion matrix and normalized per-class accuracy
     print("Testing Confusion Matrix:\n", test_confusion_matrix)
     print("Testing Normalized Confusion Matrix (per-class accuracy):\n",
           test_confusion_matrix.diag() / test_confusion_matrix.sum(1))
-
-    # Print average testing loss and accuracy
-    print(f'Average Testing Loss: {all_test_loss:.4f}, Average Testing Accuracy: {all_test_acc:.4f}')
 
     # Create directories to save results, accuracies, and losses
     create_results_directories()
@@ -1074,8 +1122,8 @@ def main():
     total_time = end_time - start_time
     print("Total Script Runtime: {:.2f} seconds".format(total_time))
 
-    # Return final test accuracy for further use
-    print(all_test_acc)
+    # Print final test F1 score
+    print(test_f1)
 
 if __name__ == "__main__":
     main()
