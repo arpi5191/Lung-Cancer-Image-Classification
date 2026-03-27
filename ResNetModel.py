@@ -39,52 +39,47 @@ global feature_dim
 global num_classes
 global activation
 
-# Define the feature dimension for a single-channel input
+# Spatial size (height = width) of each input image patch in pixels.
+# ResNet18 with AdaptiveAvgPool2d(1,1) can accept any spatial size, so this
+# value is also used when reshaping tensors in the train/eval loops.
 feature_dim = 512
 
-# Define the number of output classes (e.g., drug labels)
+# Number of output classes for the final classification layer (e.g. Cancerous vs NotCancerous).
 num_classes = 2
 
-# Dictionary to store activations (output features) of specific layers during the forward pass
+# Shared dictionary populated by forward hooks; maps layer name → detached output tensor.
+# Populated during each forward pass so embeddings can be retrieved outside the model.
 activation = {}
 
-# Set a random seed for full reproducibility
-seed = 42
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
+# # Set a random seed for full reproducibility
+# seed = 42
+# random.seed(seed)
+# np.random.seed(seed)
+# torch.manual_seed(seed)
+# torch.cuda.manual_seed_all(seed)
+# torch.backends.cudnn.deterministic = True
+# torch.backends.cudnn.benchmark = False
+
 
 def get_patch_files(patches_dir, image_patches, total_image_count):
     """
-    Retrieves image patch file paths from subdirectories within a given directory.
+    Collect image patch file paths from every subdirectory inside `patches_dir`.
 
-    This function:
-        - Iterates through all subdirectories within the specified `patches_dir`.
-        - Collects image file paths (excluding system files like `.DS_Store`).
-        - Updates a dictionary (`image_patches`) that maps each subdirectory to its list of image files.
-        - Counts the total number of image files processed.
+    Iterates one level deep: each immediate child directory of `patches_dir` is
+    treated as a "patch group" whose image files are gathered into a list.
+    System / metadata files (e.g. `.DS_Store`) are excluded.
 
     Args:
-        patches_dir (str): The root directory containing subdirectories of image patches.
-        image_patches (dict): A dictionary mapping subdirectory paths to lists of image file paths.
-        total_image_count (int): A running count of all image files encountered.
+        patches_dir (str): Root directory whose subdirectories contain image patches.
+        image_patches (dict): Accumulator mapping subdirectory path → list of image
+            file paths. Updated in-place and also returned.
+        total_image_count (int): Running total of image files seen so far across
+            all previous calls. Incremented by the number of files found here.
 
     Returns:
         tuple:
-            - image_patches (dict): Updated dictionary mapping subdirectory paths to image file lists.
-            - total_image_count (int): Updated count of all image files processed.
-
-    Behavior:
-        - Prints progress updates, including the directory being processed and its full path.
-        - Skips non-directory files inside `patches_dir`.
-        - Ensures only valid image files are included in the dictionary.
-
-    Side Effects:
-        - Modifies the `image_patches` dictionary in place.
-        - Prints debug messages about the directory structure and processing status.
+            image_patches (dict): Updated mapping of subdirectory → image file list.
+            total_image_count (int): Updated cumulative file count.
     """
 
     # Iterate through each item in the specified patches directory
@@ -97,7 +92,7 @@ def get_patch_files(patches_dir, image_patches, total_image_count):
         dir_path = os.path.join(patches_dir, dir_name)
         print(f"Full path: {dir_path}")
 
-        # Only continue if this path is a directory (skip files)
+        # Only continue if this path is a directory (skip loose files)
         if not os.path.isdir(dir_path):
             continue
 
@@ -117,29 +112,34 @@ def get_patch_files(patches_dir, image_patches, total_image_count):
     # Return the updated dictionary and the total image count
     return image_patches, total_image_count
 
+
 def create_data_directories():
     """
-    Creates and manages data directories for training, validation, and testing datasets.
+    Build a clean directory tree for train / validation / test datasets.
 
-    This function:
-        - Detects whether running inside a Docker container.
-        - Defines base data directory accordingly (local vs Docker).
-        - Deletes and recreates the base data directory if it exists.
-        - Creates subdirectories for train, validation, and test datasets.
-        - Further organizes these datasets into 'Cancerous' and 'NotCancerous' subdirectories.
-        - Prints status messages confirming each directory creation.
+    Detects whether the script is running inside a Docker container and
+    chooses the appropriate base path. Any pre-existing directory at that
+    path is deleted before the new structure is created, ensuring a clean
+    slate for each run.
+
+    Directory layout created:
+        <data_dir>/
+            train/
+                Cancerous/
+                NotCancerous/
+            val/
+                Cancerous/
+                NotCancerous/
+            test/
+                Cancerous/
+                NotCancerous/
 
     Returns:
-        tuple: Paths of the created directories:
-            - data_dir (str): Base data directory.
-            - train_dir (str): Training data directory.
-            - val_dir (str): Validation data directory.
-            - test_dir (str): Testing data directory.
-
-    Side Effects:
-        - Deletes existing data directory if present.
-        - Creates multiple nested directories.
-        - Prints creation success/failure messages.
+        tuple[str, str, str, str]:
+            data_dir  – Base data directory.
+            train_dir – Training split directory.
+            val_dir   – Validation split directory.
+            test_dir  – Test split directory.
     """
 
     # Detect environment and set base data directory path accordingly
@@ -159,8 +159,13 @@ def create_data_directories():
     os.makedirs(data_dir, exist_ok=True)
     print(f"Directory '{data_dir}' created successfully." if os.path.exists(data_dir) else f"Failed to create '{data_dir}'.")
 
-    # Helper function to create dataset subdirectories with 'Cancerous' and 'NotCancerous' folders
     def create_subdirs(base_path):
+        """
+        Create `base_path` and the two class subdirectories beneath it.
+
+        Args:
+            base_path (str): Path for a dataset split (train / val / test).
+        """
         os.makedirs(base_path, exist_ok=True)
         for subfolder in ['Cancerous', 'NotCancerous']:
             path = os.path.join(base_path, subfolder)
@@ -182,26 +187,23 @@ def create_data_directories():
     # Return paths for base, train, val, and test directories
     return data_dir, train_dir, val_dir, test_dir
 
+
 def copy_directories_to_directories(dst_dir, dirs):
     """
-    Copies a list of source directories into categorized target subdirectories under dst_dir.
+    Copy patch group directories into the appropriate class subfolder of `dst_dir`.
 
-    For each directory in `dirs`:
-    - If its name contains "NotCancerous", copies it into dst_dir/NotCancerous/
-    - If its name contains "Cancerous", copies it into dst_dir/Cancerous/
-    - Ignores directories that don't match these categories.
+    Each directory in `dirs` is inspected for the substring ``"Cancerous"`` or
+    ``"NotCancerous"`` in its path. Matching directories are copied (via
+    ``shutil.copytree``) under the corresponding class subfolder inside
+    `dst_dir`. Directories whose names match neither category are silently
+    skipped.
 
     Args:
-        dst_dir (str): Destination root directory.
-        dirs (list of str): List of source directory paths to copy.
-
-    Side Effects:
-        - Creates directories under dst_dir if needed.
-        - Copies directories and their contents using shutil.copytree.
-        - Prints a confirmation message per copied directory.
+        dst_dir (str): Destination split root (e.g. the train or val directory).
+        dirs (list[str]): Source directory paths to distribute.
     """
 
-    # Define category subdirectories under destination directory
+    # Target subdirectories for each class within the destination split root
     cancer_dir_path = os.path.join(dst_dir, 'Cancerous')
     no_cancer_dir_path = os.path.join(dst_dir, 'NotCancerous')
 
@@ -209,158 +211,175 @@ def copy_directories_to_directories(dst_dir, dirs):
     for dir in dirs:
         source_dir = Path(dir)
 
-        # Assign target directory based on category found in source directory's name
+        # Route to the correct class subfolder based on the directory name
         if "NotCancerous" in str(dir):
             target_dir = no_cancer_dir_path
         elif "Cancerous" in str(dir):
             target_dir = cancer_dir_path
         else:
-            # Skip directories that don't match expected categories
+            # Skip directories that don't match either expected category
             continue
 
         # Compose full target path including source directory name
         target_path = os.path.join(target_dir, os.path.basename(source_dir))
 
-        # Copy the entire source directory to target location
+        # Copy the entire source directory tree to the target location
         shutil.copytree(source_dir, target_path)
 
-        # Confirm copy operation
         print(f"Directory '{source_dir}' has been copied into '{target_dir}' as '{target_path}'.")
+
 
 def define_train_transformer():
     """
-    Defines a composed image transformation pipeline for training data preprocessing and augmentation.
+    Build the image transformation pipeline used for training data.
 
-    Transformations applied:
-    - Convert images to grayscale with a single channel (drops color information).
-    - Randomly flip images horizontally and vertically to augment data.
-    - Apply random brightness adjustment while keeping contrast and saturation unchanged.
-    - Convert images to PyTorch tensors for model input.
-    - (Optional) reshape the tensor, currently commented out.
+    Augmentations are applied to improve generalisation:
+    - Grayscale conversion (1 channel) to match the single-channel model input.
+    - Random horizontal and vertical flips for spatial augmentation.
+    - Random brightness jitter (±150 %) while leaving contrast, saturation,
+      and hue unchanged (no effect for grayscale images).
+    - Conversion to a PyTorch ``FloatTensor`` scaled to [0, 1].
 
     Returns:
-        torchvision.transforms.Compose: Transformation pipeline for training images.
+        torchvision.transforms.Compose: Composed transform for training images.
     """
     transform = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),  # Convert to grayscale (1 channel)
-        transforms.RandomHorizontalFlip(),            # Random horizontal flip (50% chance)
-        transforms.RandomVerticalFlip(),              # Random vertical flip (50% chance)
+        transforms.Grayscale(num_output_channels=1),  # Convert to single-channel grayscale
+        transforms.RandomHorizontalFlip(),            # Random horizontal flip (50 % chance)
+        transforms.RandomVerticalFlip(),              # Random vertical flip  (50 % chance)
         transforms.ColorJitter(
-            brightness=1.5,    # Brightness varies up to ±50%
-            contrast=1.0,      # Contrast unchanged
-            saturation=1.0,    # Saturation unchanged (no effect on grayscale)
-            hue=0              # No hue change
+            brightness=1.5,    # Brightness varies up to ±150 %
+            contrast=1.0,      # Contrast factor of 1.0 → no change
+            saturation=1.0,    # Saturation factor of 1.0 → no change (also irrelevant for grayscale)
+            hue=0              # No hue adjustment
         ),
-        transforms.ToTensor(),                        # Convert to tensor for PyTorch
-        # transforms.Lambda(lambda x: x.reshape(1, 4608, 4608))  # Optional reshaping (commented)
+        transforms.ToTensor(),                        # Convert PIL image to FloatTensor in [0, 1]
+        # transforms.Lambda(lambda x: x.reshape(1, 4608, 4608))  # Optional reshaping (commented out)
     ])
     return transform
+
 
 def define_val_test_transformer():
     """
-    Defines a composed image transformation pipeline for validation and testing data preprocessing.
+    Build the image transformation pipeline used for validation and test data.
 
-    Transformations applied:
-    - Convert images to grayscale with a single channel.
-    - Convert images to PyTorch tensors.
-    - (Optional) reshape tensor, currently commented out.
+    No augmentation is applied; only the minimal preprocessing required to
+    produce a valid model input:
+    - Grayscale conversion (1 channel).
+    - Conversion to a PyTorch ``FloatTensor`` scaled to [0, 1].
 
     Returns:
-        torchvision.transforms.Compose: Transformation pipeline for validation/testing images.
+        torchvision.transforms.Compose: Composed transform for validation / test images.
     """
     transform = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),  # Convert to grayscale (1 channel)
-        transforms.ToTensor(),                          # Convert to tensor for PyTorch
-        # transforms.Lambda(lambda x: x.reshape(1, 4608, 4608))  # Optional reshaping (commented)
+        transforms.Grayscale(num_output_channels=1),  # Convert to single-channel grayscale
+        transforms.ToTensor(),                         # Convert PIL image to FloatTensor in [0, 1]
+        # transforms.Lambda(lambda x: x.reshape(1, 4608, 4608))  # Optional reshaping (commented out)
     ])
     return transform
 
+
 def sampler(dataset, count, size=1000):
     """
-    Creates a weighted sampler to balance class representation during training.
+    Build a ``WeightedRandomSampler`` that balances class representation per epoch.
 
-    It computes inverse-frequency weights so that underrepresented classes
-    are sampled more frequently, and returns a WeightedRandomSampler.
+    Assigns each sample a weight inversely proportional to its class frequency
+    so that minority classes are drawn more often, counteracting class imbalance.
+    Sampling is performed *with replacement*.
 
     Args:
-        dataset (torch.utils.data.Dataset): Dataset with a 'targets' attribute listing class labels.
-        count (int): Number of dataset samples to consider (typically length of dataset).
-        size (int, optional): Number of samples to draw in each epoch (default 1000).
+        dataset (torch.utils.data.Dataset): Dataset with a ``targets`` attribute
+            containing integer class labels for every sample.
+        count (int): Number of samples in the dataset (typically ``len(dataset)``).
+            Currently unused in the body but kept for API consistency.
+        size (int): Number of samples drawn per epoch. Defaults to 1000.
+            Currently unused directly; ``len(dataset)`` is passed to the sampler
+            instead, preserving the original behaviour.
 
     Returns:
-        torch.utils.data.sampler.WeightedRandomSampler: Sampler with class-balanced sampling weights.
+        torch.utils.data.sampler.WeightedRandomSampler: Class-balanced sampler.
     """
 
     # Count how many samples exist per class
     class_counter = dict(Counter(dataset.targets))
 
-    # Compute weights as inverse of class counts for balancing
+    # Compute per-class weights as the inverse of their sample counts
     class_weights = 1 / torch.Tensor([ct for ct in class_counter.values()])
 
-    # Prepare indices for the dataset
+    # Index all samples in the dataset
     dataset_indices = list(range(len(dataset)))
 
-    # Get labels for all samples in dataset_indices
+    # Retrieve the integer label for every sample
     targets = torch.Tensor(dataset.targets)[dataset_indices]
 
-    # Assign a sampling weight to each sample based on its class weight
+    # Map each sample to its class weight
     sample_weights = [class_weights[int(target)] for target in targets]
 
-    # Create WeightedRandomSampler with replacement to oversample minority classes
+    # Build the sampler; replacement=True allows oversampling of minority classes
     weighted_sampler = torch.utils.data.sampler.WeightedRandomSampler(
         sample_weights, len(dataset), replacement=True
     )
 
     return weighted_sampler
 
+
 def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=8):
     """
-    Split image patches into training, validation, and test sets, then create DataLoaders.
+    Partition image patch directories into train / val / test splits and return DataLoaders.
+
+    The split is performed at the *directory* (patch-group) level rather than
+    at the individual file level, so all patches from the same tissue region
+    stay together in a single split. Directories are shuffled before allocation
+    to reduce ordering bias.
 
     Steps:
-    1. Create directories for train/val/test datasets.
-    2. Shuffle and sort input image patch directories.
-    3. Allocate directories to train/val/test sets based on desired ratios.
-    4. Copy image files to their respective directories.
-    5. Define transformations for each set.
-    6. Create PyTorch DataLoaders with appropriate samplers and batching.
+        1. Create clean on-disk directory trees for each split.
+        2. Shuffle patch-group directories and allocate them to splits so that
+           the cumulative file counts approximate the requested ratios.
+        3. Copy allocated directories into the appropriate split folders.
+        4. Apply augmentation transforms to training data; plain transforms to
+           validation and test data.
+        5. Wrap each split in a ``DataLoader``; training uses a
+           ``WeightedRandomSampler`` to handle class imbalance.
 
     Args:
-        image_patches (dict): {directory_path: [list_of_image_files]} mapping.
-        total_image_count (int): Total number of image files.
-        train_ratio (float): Fraction of data for training (default 0.60).
-        val_ratio (float): Fraction of data for validation (default 0.20).
-        test_ratio (float): Fraction of data for testing (default 0.20).
-        batch_size (int): Number of samples per batch in DataLoader (default 32).
+        image_patches (dict): Mapping of patch-group directory path → list of
+            image file paths, as returned by ``get_patch_files``.
+        total_image_count (int): Total number of image files across all groups.
+        train_ratio (float): Fraction of images to allocate to training. Default 0.50.
+        val_ratio (float): Fraction of images to allocate to validation. Default 0.30.
+        test_ratio (float): Fraction of images to allocate to testing. Default 0.20.
+        batch_size (int): Samples per mini-batch for all DataLoaders. Default 8.
 
     Returns:
-        tuple: (train_loader, val_loader, test_loader) PyTorch DataLoader objects.
+        tuple[DataLoader, DataLoader, DataLoader]:
+            train_loader, val_loader, test_loader
     """
 
-    # Create directories to store the split datasets
+    # Create clean on-disk directory trees for each split
     data_dir, train_dir, val_dir, test_dir = create_data_directories()
 
-    # Get all keys (directories) and shuffle them for randomness
+    # Shuffle patch-group directories to randomise the split allocation
     image_keys = list(image_patches.keys())
     random.shuffle(image_keys)
 
-    # Map shuffled keys back to patches dict for ordered iteration
+    # Reconstruct the dict in shuffled order for deterministic iteration
     sorted_image_patches = {key: image_patches[key] for key in image_keys}
 
-    # Calculate number of images per split based on ratios
+    # Target image counts for each split based on the requested ratios
     train_count = round(train_ratio * total_image_count)
     val_count = round(val_ratio * total_image_count)
     test_count = round(test_ratio * total_image_count)
 
-    # Lists to hold directories assigned to each split
+    # Accumulators for directories assigned to each split
     train_dirs, val_dirs, test_dirs = [], [], []
 
-    # Counters to keep track of how many images allocated to each split
+    # Running image-count totals used to decide which split a directory goes to
     cur_train_count = 0
     cur_val_count = 0
     cur_test_count = 0
 
-    # Allocate directories to train/val/test splits ensuring approximate ratios
+    # Greedily assign each patch group to the split that still has capacity
     for image_path, image_files in sorted_image_patches.items():
         count = len(image_files)
         if (cur_train_count + count) < train_count:
@@ -370,120 +389,151 @@ def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio
             cur_val_count += count
             val_dirs.append(image_path)
         else:
+            # All remaining directories go to the test split
             cur_test_count += count
             test_dirs.append(image_path)
 
     print("Current counts -> Train: {}, Validation: {}, Test: {}".format(cur_train_count, cur_val_count, cur_test_count))
 
-    # Copy image files into their respective directories for each split
+    # Copy each split's patch groups into the corresponding on-disk directories
     copy_directories_to_directories(train_dir, train_dirs)
     copy_directories_to_directories(val_dir, val_dirs)
     copy_directories_to_directories(test_dir, test_dirs)
 
-    # Define image transforms for training, validation, and testing sets
+    # Training transform includes data augmentation; val/test transforms do not
     train_transform = define_train_transformer()
     val_transform = define_val_test_transformer()
     test_transform = define_val_test_transformer()
 
-    # Load datasets applying transforms
+    # Build ImageFolder datasets from the populated on-disk split directories
     train_dataset = datasets.ImageFolder(train_dir, transform=train_transform)
     val_dataset = datasets.ImageFolder(val_dir, transform=val_transform)
     test_dataset = datasets.ImageFolder(test_dir, transform=test_transform)
 
-    # Create a weighted sampler for training to balance classes
+    # Weighted sampler ensures balanced class representation during training
     weighted_sampler = sampler(train_dataset, cur_train_count)
 
-    # Create DataLoaders with batch size and sampler (train) or shuffle (val/test)
+    # Training DataLoader uses the weighted sampler; val/test use default sequential order
     train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler)
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
     return train_loader, val_loader, test_loader
 
-class ModelEmbedding(nn.Module):
-    '''
-    Custom model wrapper that removes the original model's final layer,
-    adds a linear embedding layer, and includes a final classification layer.
 
-    This allows simultaneous feature embedding extraction and classification.
+class ModelEmbedding(nn.Module):
+    """
+    ResNet wrapper that exposes both intermediate embeddings and final class logits.
+
+    The original model's final layer is removed. A new linear embedding layer
+    (with ReLU activation) is inserted before the classification head, allowing
+    both the embedding vector and the class logits to be returned from a single
+    forward pass.
+
+    The ``data_type`` argument controls whether the embedding layer is part of
+    the classification path:
+    - ``"tumor"`` or ``"context"``: Classification head is applied directly to
+      the flattened feature map, bypassing the embedding layer.
+    - Any other value: Classification head is applied to the embedding output.
 
     Attributes:
-        features (nn.Sequential): Original model layers except the final output layer.
-        linear (nn.Linear): Linear layer to transform features into embeddings.
-        relu (nn.ReLU): ReLU activation applied after the linear layer.
-        finlinear (nn.Linear): Final classification layer producing class logits.
-    '''
+        data_type (str): Segmentation type controlling the forward-pass routing.
+        features (nn.Sequential): All original model layers except the final one,
+            used as a convolutional feature extractor.
+        linear (nn.Linear): Projects the flattened feature map to a
+            ``feature_dim``-dimensional embedding space.
+        relu (nn.ReLU): Non-linearity applied after ``linear``.
+        finlinear (nn.Linear): Classification head mapping from ``feature_dim``
+            to ``num_classes`` logits.
+    """
 
-    def __init__(self, original_model):
-        '''
-        Initialize ModelEmbedding by modifying the given pre-trained model.
+    def __init__(self, original_model, data_type):
+        """
+        Initialise ModelEmbedding from a pre-trained model.
 
         Args:
-            original_model (nn.Module): Pre-trained model to modify by removing final layer.
-        '''
+            original_model (nn.Module): Pre-trained model whose last child layer
+                will be replaced by the custom embedding and classification heads.
+            data_type (str): One of ``"tumor"``, ``"context"``, or ``"voronoi"``.
+                Controls which path is used inside ``forward``.
+        """
         super(ModelEmbedding, self).__init__()
 
-        # Extract all layers except the last from original model to use as feature extractor
+        self.data_type = data_type
+
+        # Strip the original model's final layer; keep everything else as the feature extractor
         self.features = nn.Sequential(*list(original_model.children()))[:-1]
 
-        # Linear layer to project extracted features to embeddings of size `feature_dim`
+        # Linear layer projecting flattened features to a feature_dim-dimensional embedding
         self.linear = nn.Linear(feature_dim, feature_dim)
 
-        # ReLU activation for non-linearity after linear embedding layer
+        # ReLU non-linearity applied to the embedding output
         self.relu = nn.ReLU(inplace=True)
 
-        # Final classification layer outputting logits for `num_classes` classes
+        # Final classification head: feature_dim → num_classes logits
         self.finlinear = nn.Linear(in_features=feature_dim, out_features=num_classes, bias=True)
 
     def forward(self, x):
-        '''
-        Forward pass through the model.
+        """
+        Run a forward pass and return both the embedding and the class logits.
 
         Args:
-            x (torch.Tensor): Input tensor, typically image batch of shape (batch_size, channels, H, W).
+            x (torch.Tensor): Input batch of shape
+                ``(batch_size, 1, feature_dim, feature_dim)``.
 
         Returns:
-            tuple:
-                embedding_out (torch.Tensor): Embedding vector after linear layer and ReLU, shape (batch_size, feature_dim).
-                out (torch.Tensor): Classification logits, shape (batch_size, num_classes).
-        '''
-        # Pass input through feature extractor layers
+            tuple[torch.Tensor, torch.Tensor]:
+                embedding_out – Embedding vector of shape ``(batch_size, feature_dim)``
+                    (always computed but used in classification only for non-tumor/context types).
+                out – Classification logits of shape ``(batch_size, num_classes)``.
+        """
+        # Extract feature maps through the convolutional backbone
         embedding = self.features(x)
 
-        # Flatten feature maps to (batch_size, feature_dim)
+        # Flatten the spatial feature maps to a 1-D vector per sample
         embedding = embedding.view(embedding.size(0), -1)
 
-        # Extract embeddings by linear transformation + ReLU activation
+        # Compute the embedding vector via a linear transform followed by ReLU
         embedding_out = self.relu(self.linear(embedding))
 
-        # Compute classification output from original embedding features
-        out = self.finlinear(embedding_out)
+        if self.data_type in ["tumor", "context"]:
+            # Classify directly from the raw flattened features (no embedding layer in path)
+            out = self.finlinear(embedding)
+        else:
+            # Classify from the embedding output (embedding layer is part of the path)
+            out = self.finlinear(embedding_out)
+            print("NOT")
 
-        # Return embeddings and classification output
+        # Return both the embedding vector and the classification logits
         return embedding_out, out
 
-def load_model():
-    """
-    Loads a pre-trained ResNet18 model, modifies it for grayscale image input,
-    and prepares it for training or inference with a custom final fully connected layer.
 
-    Steps:
-    1. Load ResNet34 pretrained on ImageNet.
-    2. Replace first conv layer to accept single-channel grayscale images.
-    3. Replace average pooling with adaptive average pooling (output size 1x1).
-    4. Modify final fully connected layer to output the desired number of classes.
-    5. Wrap model with a custom ModelEmbedding class to enable feature embedding extraction.
-    6. Move model to GPU if available, else CPU.
+def load_model(data_type):
+    """
+    Instantiate and configure a modified ResNet18 for single-channel grayscale input.
+
+    Modifications applied to the stock torchvision ResNet18:
+    - ``conv1`` replaced to accept 1-channel input instead of 3.
+    - ``avgpool`` replaced with ``AdaptiveAvgPool2d(1, 1)`` to handle
+      arbitrary spatial input sizes.
+    - ``fc`` replaced to output ``num_classes`` logits.
+    - The whole model is wrapped in ``ModelEmbedding`` to expose embeddings.
+    - Moved to GPU(s) if available; wrapped in ``DataParallel`` for multi-GPU.
+
+    Args:
+        data_type (str): Passed through to ``ModelEmbedding`` to control the
+            forward-pass routing (``"tumor"``, ``"context"``, or ``"voronoi"``).
 
     Returns:
-        device (torch.device): The computation device used (GPU or CPU).
-        model (torch.nn.Module): The modified ResNet18 model wrapped with ModelEmbedding.
+        tuple[torch.device, nn.Module]:
+            device – The primary computation device (GPU or CPU).
+            model  – The fully configured model placed on ``device``.
     """
 
-    # Load pretrained ResNet34 model
+    # Load ImageNet-pretrained ResNet18 as the backbone
     model = models.resnet18(pretrained=True)
 
-    # Modify first conv layer for grayscale input (1 channel)
+    # Replace the first conv layer to accept single-channel (grayscale) images
     model.conv1 = nn.Conv2d(
         in_channels=1,
         out_channels=64,
@@ -493,637 +543,763 @@ def load_model():
         bias=False
     )
 
-    # Replace average pooling with adaptive average pooling (output size 1x1)
+    # Replace the average-pool with an adaptive version so any spatial size is accepted
     model.avgpool = nn.AdaptiveAvgPool2d(output_size=(1, 1))
 
-    # Modify final fully connected layer for custom number of classes
+    # Swap the final FC layer to produce the correct number of class logits
     model.fc = nn.Linear(model.fc.in_features, num_classes)
 
-    # Wrap model to extract embeddings by removing final layer
-    model = ModelEmbedding(model)
+    # Wrap the modified backbone so embeddings and logits can both be retrieved
+    model = ModelEmbedding(model, data_type)
 
-    # Select device: GPU if available, else CPU
+    # Use GPU if available; fall back to CPU otherwise
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Wrap for multi-GPU if more than 1 GPU available
+    # Distribute computation across all available GPUs when there are multiple
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
 
-    # Send model to GPU(s)
+    # Move all model parameters and buffers to the selected device
     model = model.to(device)
 
-    # Return the device and the model now on GPU(s) so inputs can be moved to the same device for training/inference
     return device, model
+
 
 def get_activation(name, activation):
     """
-    Creates a forward hook function to capture activations of a given model layer.
+    Factory that returns a forward hook for capturing a layer's output tensor.
 
-    This hook can be registered on any layer to store its output during forward pass.
+    The returned hook stores a *detached* copy of the layer's output in the
+    shared ``activation`` dictionary under ``name``, so it can be read after
+    the forward pass without affecting gradient computation.
 
     Args:
-        name (str): Identifier key for the activation dictionary.
-        activation (dict): Dictionary to store activations by name.
+        name (str): Key used to store the captured output in ``activation``.
+        activation (dict): Shared dictionary to write captured tensors into.
 
     Returns:
-        function: A hook function that stores the detached output of the layer.
+        Callable: A hook function compatible with ``Module.register_forward_hook``.
     """
 
     def hook(model, input, output):
-        # Detach output tensor to avoid affecting gradients and store in activation dict
+        # Detach from the computation graph and store for external access
         activation[name] = output.detach()
 
     return hook
 
+
 def get_params(model, learningRate=1e-4, weight_decay=1e-5, momentum=0.70, factor=0.5, patience=3):
     """
-    Initializes and returns the loss function, optimizer, and learning rate scheduler for model training.
+    Configure and return the loss function, optimiser, and learning-rate scheduler.
 
     Args:
-        model (torch.nn.Module): The neural network model to be trained.
-        learningRate (float, optional): Initial learning rate for the optimizer. Default is 1e-4.
-        weight_decay (float, optional): Weight decay (L2 regularization) factor. Default is 1e-4.
-        momentum (float, optional): Momentum parameter (not used by AdamW, included for consistency). Default is 0.9.
-        factor (float, optional): Multiplicative factor to reduce learning rate when scheduler triggers. Default is 0.5.
-        patience (int, optional): Number of epochs with no improvement before reducing LR. Default is 3.
+        model (nn.Module): The model whose parameters will be optimised.
+        learningRate (float): Initial learning rate for AdamW. Default 1e-4.
+        weight_decay (float): L2 regularisation coefficient for AdamW. Default 1e-5.
+        momentum (float): Kept for API consistency; not used by AdamW. Default 0.70.
+        factor (float): Multiplicative LR reduction factor applied by the scheduler.
+            Default 0.5 (halves the LR on each trigger).
+        patience (int): Number of epochs with no validation-loss improvement before
+            the scheduler reduces the LR. Default 3.
 
     Returns:
-        tuple:
-            criterion (torch.nn.CrossEntropyLoss): Loss function for classification tasks.
-            optimizer (torch.optim.AdamW): AdamW optimizer with specified LR and weight decay.
-            scheduler (torch.optim.lr_scheduler.ReduceLROnPlateau): LR scheduler that reduces LR on plateau.
+        tuple[nn.CrossEntropyLoss, torch.optim.AdamW, ReduceLROnPlateau]:
+            criterion  – Cross-entropy loss for multi-class classification.
+            optimizer  – AdamW optimiser.
+            scheduler  – ``ReduceLROnPlateau`` scheduler monitoring validation loss.
     """
 
-    # CrossEntropyLoss is suitable for multi-class classification problems
+    # Cross-entropy loss is standard for multi-class classification
     criterion = nn.CrossEntropyLoss()
 
-    # AdamW optimizer includes weight decay for regularization
+    # AdamW couples weight decay correctly (decoupled from the gradient update)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learningRate, weight_decay=weight_decay)
 
-    # ReduceLROnPlateau scheduler lowers LR when validation loss stops improving
+    # Reduce LR when validation loss stops improving
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=factor, patience=patience)
 
     return criterion, optimizer, scheduler
 
+
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
           num_epochs=45, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
-          all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[]):
+          all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[],
+          all_train_f1 = [], all_val_f1 = []):
     """
-    Trains the model over multiple epochs, tracking training and validation metrics.
+    Train the model for a fixed number of epochs with per-epoch validation.
+
+    After every training epoch the model is evaluated on the validation set via
+    ``testing()``. The learning-rate scheduler is stepped using the validation
+    loss at the end of each epoch.
+
+    Per-epoch metrics collected for training:
+        - Average cross-entropy loss.
+        - Top-1 accuracy.
+        - Macro-averaged precision, recall, and F1 (via scikit-learn).
+        - Confusion matrix.
 
     Args:
-        model (torch.nn.Module): The PyTorch model to train.
-        device (torch.device): Device to run computations on (CPU or GPU).
-        train_loader (DataLoader): DataLoader for training data.
-        val_loader (DataLoader): DataLoader for validation data.
+        model (nn.Module): Model to train (modified in-place).
+        device (torch.device): Computation device.
+        train_loader (DataLoader): Iterable over training mini-batches.
+        val_loader (DataLoader): Iterable over validation mini-batches.
         criterion (nn.Module): Loss function.
-        optimizer (torch.optim.Optimizer): Optimizer to update model parameters.
-        scheduler (torch.optim.lr_scheduler or None): Learning rate scheduler (optional).
-        num_epochs (int): Number of epochs to train.
-        start_epoch (int, optional): Epoch number to start training from (for resuming).
-        all_train_embeddings (list, optional): List to accumulate train embeddings over epochs.
-        all_val_embeddings (list, optional): List to accumulate val embeddings over epochs.
-        all_train_loss (list, optional): List to accumulate train loss per epoch.
-        all_val_loss (list, optional): List to accumulate val loss per epoch.
-        all_train_acc (list, optional): List to accumulate train accuracy per epoch.
-        all_val_acc (list, optional): List to accumulate val accuracy per epoch.
+        optimizer (torch.optim.Optimizer): Parameter update rule.
+        scheduler (lr_scheduler or None): LR scheduler stepped on validation loss.
+            Pass ``None`` to disable scheduling.
+        num_epochs (int): Total number of epochs to run. Default 45.
+        start_epoch (int): First epoch index (used when resuming training). Default 0.
+        all_train_embeddings (list): Accumulator for per-epoch training embeddings.
+        all_val_embeddings (list): Accumulator for per-epoch validation embeddings.
+        all_train_loss (list): Accumulator for per-epoch mean training loss.
+        all_val_loss (list): Accumulator for per-epoch mean validation loss.
+        all_train_acc (list): Accumulator for per-epoch training accuracy.
+        all_val_acc (list): Accumulator for per-epoch validation accuracy.
 
     Returns:
-        tuple: Updated lists containing embeddings, loss, and accuracy metrics for train and val sets.
+        tuple: Eight lists in order —
+            all_train_embeddings, all_val_embeddings,
+            all_train_loss, all_val_loss,
+            all_train_acc,  all_val_acc,
+            batch_latencies, batch_throughputs
     """
 
-    # Set model to training mode (enables dropout, batchnorm updates, etc.)
+    # Lists to record per-batch timing statistics across all epochs
+    batch_latencies = []
+    batch_throughputs = []
+
+    # Put model in training mode (activates dropout, batch-norm running stats, etc.)
     model.train()
 
-    # Loop over each epoch
+    # ── Epoch loop ─────────────────────────────────────────────────────────────
     for epoch in range(start_epoch, num_epochs):
 
-        # ── Reset all counters at the start of each epoch ─────────────────────
-        # BUG FIX: in the original code, `total` and `accuracy` were declared
-        # outside the epoch loop, causing them to accumulate across all epochs
-        # instead of reflecting only the current epoch's performance.
+        # ── Reset per-epoch accumulators ───────────────────────────────────────
+        # NOTE (bug fix): these were originally outside the epoch loop, which
+        # caused accuracy and total to accumulate across epochs, producing
+        # inflated accuracy values after the first epoch.
         total = 0
         accuracy = 0
-        epoch_train_loss = []   # Loss values for this epoch only
-        train_embeddings = []   # Embeddings for this epoch only
-        avg_loss = 0.0          # Running avg for periodic batch-level printing
+        epoch_train_loss = []   # Per-sample loss values for this epoch
+        train_embeddings = []   # Embeddings captured this epoch
+        avg_loss = 0.0          # Running sum used for periodic batch-level logging
 
-        # Collect all true labels and predictions this epoch for sklearn metrics
+        # Accumulators for scikit-learn metrics (computed at epoch end)
         all_labels = []
         all_preds  = []
 
-        # Reset confusion matrix each epoch
+        # Confusion matrix reset each epoch; shape: [num_classes × num_classes]
         train_confusion_matrix = torch.zeros(num_classes, num_classes)
 
-        # Iterate over batches from training DataLoader
+        # ── Batch loop ─────────────────────────────────────────────────────────
         for batch_num, (feats, labels) in enumerate(train_loader):
-            # Reshape features to match model input dimensions (batch, channel, height, width)
+            # Reshape to (batch, 1 channel, H, W) expected by the model
             feats = feats.reshape(-1, 1, feature_dim, feature_dim)
 
-            # Move features and labels to the specified device (CPU/GPU)
+            # Transfer data to the computation device
             feats, labels = feats.to(device), labels.to(device)
 
-            # Zero out gradients to avoid accumulation from previous batch
+            # Start time
+            batch_start = time.time()
+
+            # Clear gradients from the previous iteration
             optimizer.zero_grad()
 
-            # Forward pass through the model: outputs and embeddings (assuming model returns both)
+            # Forward pass; model returns (embedding, logits)
             _, outputs = model(feats)
 
-            # Predict class labels using softmax probabilities
+            # Convert logits to predicted class indices via softmax then argmax
             _, pred_labels = torch.max(F.softmax(outputs, dim=1), 1)
-            pred_labels = pred_labels.view(-1)  # Flatten predictions
+            pred_labels = pred_labels.view(-1)  # Ensure 1-D tensor
 
-            # Update confusion matrix counts for this batch
+            # Accumulate confusion matrix counts for this batch
             for t, p in zip(labels.view(-1), pred_labels):
                 train_confusion_matrix[t.long(), p.long()] += 1
 
-            # Accumulate labels and predictions (moved to CPU) for sklearn metrics at epoch end
+            # Collect CPU copies for scikit-learn metrics at epoch end
             all_labels.extend(labels.cpu().numpy())
             all_preds.extend(pred_labels.cpu().numpy())
 
-            # Extract embeddings from model's stored activations (if available)
+            # Store layer activations captured by the forward hook (if registered)
             if 'avg_pool' in activation:
                 train_embeddings.append(activation['avg_pool'].detach().cpu().numpy())
 
-            # Compute loss between model predictions and true labels
+            # Compute cross-entropy loss for this batch
             loss = criterion(outputs, labels.long())
 
-            # Backpropagation to compute gradients
+            # Backpropagate gradients through the computation graph
             loss.backward()
 
-            # Optimizer step to update model weights
+            # Apply the computed gradients to update model parameters
             optimizer.step()
 
-            # Calculate number of correct predictions in this batch
+            # Record batch wall-clock time and throughput
+            batch_time = time.time() - batch_start
+            batch_latencies.append(batch_time * 1000)
+            batch_throughputs.append(feats.size(0) / batch_time)
+
+            # Count correct predictions in this batch
             curr_accuracy = torch.sum(torch.eq(pred_labels, labels)).item()
 
-            # Update running totals for this epoch only
+            # Accumulate epoch-level accuracy and sample count
             accuracy += curr_accuracy
             total += len(labels)
 
-            # Record batch loss (one entry per sample in the batch)
+            # Store one loss entry per sample so the epoch mean is sample-weighted
             epoch_train_loss.extend([loss.item()] * feats.size(0))
 
-            # Accumulate batch loss for periodic printing
+            # Accumulate for the periodic batch-level log message
             avg_loss += loss.item()
 
-            # Print average loss every 8 batches for monitoring
+            # Log the average loss every 8 batches
             if (batch_num + 1) % 8 == 0:
                 print(f'Training Epoch: {epoch + 1}\tBatch: {batch_num + 1}\tAvg-Loss: {avg_loss / 8:.4f}')
-                avg_loss = 0.0  # Reset average loss after printing
+                avg_loss = 0.0  # Reset after logging
 
-            # Clear unused GPU memory to prevent leaks
+            # Release cached GPU memory to avoid fragmentation
             torch.cuda.empty_cache()
 
-            # Explicitly delete variables to free memory
+            # Explicitly delete tensors that are no longer needed this iteration
             del feats, labels, loss, outputs
 
-        # Compute per-epoch average training loss and accuracy
+        # ── Epoch-level training metrics ───────────────────────────────────────
         avg_train_loss = np.mean(epoch_train_loss) if len(epoch_train_loss) > 0 else 0.0
         avg_train_acc  = accuracy / total if total > 0 else 0.0
 
-        # Compute macro precision, recall, and F1 using scikit-learn
+        # Macro-averaged sklearn metrics (treats all classes equally regardless of size)
         train_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
         train_recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
         train_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
-        # Append current epoch metrics to overall lists
+        # Append this epoch's embeddings and scalar metrics to the cross-epoch lists
         all_train_embeddings.extend(train_embeddings)
         all_train_loss.append(avg_train_loss)
         all_train_acc.append(avg_train_acc)
+        all_train_f1.append(train_f1)
 
-        # Print training metrics
+        # Log training metrics for this epoch
         print(f'Epoch {epoch + 1} - Avg Training Loss: {avg_train_loss:.4f} | '
               f'Accuracy: {avg_train_acc:.4f} | Precision: {train_precision:.4f} | '
               f'Recall: {train_recall:.4f} | F1: {train_f1:.4f}')
 
-        # Print confusion matrix and per-class accuracy for training data
+        # Display the confusion matrix and per-class accuracy (diagonal / row sum)
         print("Training Confusion Matrix:\n", train_confusion_matrix)
         print("Training Normalized Confusion Matrix (per-class accuracy):\n",
               train_confusion_matrix.diag() / train_confusion_matrix.sum(1))
 
-        # Blank line for readability
         print()
 
-        # Validate the model on validation dataset and collect metrics
+        # ── Validation pass for this epoch ────────────────────────────────────
         val_confusion_matrix, val_embeddings, val_loss, val_acc, val_precision, val_recall, val_f1 = testing(
             model, device, val_loader, criterion
         )
 
-        # Append validation metrics to overall lists
+        # Append validation metrics to the cross-epoch lists
         all_val_embeddings.extend(val_embeddings)
         all_val_loss.append(val_loss)
         all_val_acc.append(val_acc)
+        all_val_f1.append(val_f1)
 
-        # Print validation metrics
+        # Log validation metrics for this epoch
         print(f'Epoch {epoch + 1} - Avg Validation Loss: {val_loss:.4f} | '
               f'Accuracy: {val_acc:.4f} | Precision: {val_precision:.4f} | '
               f'Recall: {val_recall:.4f} | F1: {val_f1:.4f}')
 
-        # Print validation confusion matrix and per-class accuracy
+        # Display the validation confusion matrix and per-class accuracy
         print("Validation Confusion Matrix:\n", val_confusion_matrix)
         print("Validation Normalized Confusion Matrix (per-class accuracy):\n",
               val_confusion_matrix.diag() / val_confusion_matrix.sum(1))
 
-        # Blank lines for readability
         print()
         print()
 
-        # Step learning rate scheduler based on validation loss if scheduler provided
+        # Step the LR scheduler using the validation loss (reduces LR on plateau)
         if scheduler is not None:
             scheduler.step(val_loss)
 
-    # Return all collected training and validation metrics
-    return all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc
+    # Return all collected metrics including timing statistics
+    return all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc, \
+           all_train_f1, all_val_f1, batch_latencies, batch_throughputs
+
 
 def testing(model, device, val_loader, criterion):
     """
-    Evaluate the model on a dataset (validation or test).
+    Evaluate the model on a dataset without updating model parameters.
+
+    Suitable for both validation (called from ``train``) and final test
+    evaluation (called from ``main``). The model is temporarily put into
+    ``eval`` mode and restored to ``train`` mode before returning.
 
     Args:
-        model (torch.nn.Module): The model to evaluate.
-        device (torch.device): Device to run computations on (CPU or GPU).
-        val_loader (DataLoader): DataLoader for the dataset to evaluate.
-        criterion (nn.Module): Loss function to calculate loss.
+        model (nn.Module): Model to evaluate.
+        device (torch.device): Computation device.
+        val_loader (DataLoader): DataLoader for the evaluation dataset.
+        criterion (nn.Module): Loss function used to compute batch losses.
 
     Returns:
         tuple:
-            - val_confusion_matrix (torch.Tensor): Confusion matrix for predictions.
-            - val_embeddings (list): List of extracted embeddings from the data.
-            - val_loss (float): Average loss over the dataset.
-            - val_acc (float): Accuracy over the dataset.
-            - precision (float): Macro-averaged precision (sklearn).
-            - recall (float): Macro-averaged recall (sklearn).
-            - f1 (float): Macro-averaged F1 score (sklearn).
+            val_confusion_matrix (torch.Tensor): Shape ``[num_classes, num_classes]``.
+            val_embeddings (list): Per-batch embedding arrays captured via hook.
+            val_loss (float): Mean cross-entropy loss over the full dataset.
+            val_acc (float): Top-1 accuracy over the full dataset.
+            precision (float): Macro-averaged precision (scikit-learn).
+            recall (float): Macro-averaged recall (scikit-learn).
+            f1 (float): Macro-averaged F1 score (scikit-learn).
     """
 
-    # Set model to evaluation mode (disables dropout, batchnorm updates)
+    # Disable dropout and use running stats for batch normalisation
     model.eval()
 
-    total = 0            # Total samples processed
-    accuracy = 0         # Count of correct predictions
-    test_loss = []       # List to store batch-wise losses
-    val_embeddings = []  # List to collect embeddings
+    total = 0            # Total samples evaluated
+    accuracy = 0         # Cumulative correct-prediction count
+    test_loss = []       # Per-sample loss values
+    val_embeddings = []  # Embeddings captured via forward hook
 
-    # Collect all true labels and predictions for sklearn metrics
+    # Ground-truth and predicted labels collected for scikit-learn metrics
     all_labels = []
     all_preds  = []
 
-    # Initialize confusion matrix of size [num_classes x num_classes]
+    # Confusion matrix accumulator; zeroed once before iterating batches
     val_confusion_matrix = torch.zeros(num_classes, num_classes)
 
-    # Disable gradient computation for efficiency during evaluation
+    # Disable gradient tracking for efficiency during evaluation
     with torch.no_grad():
-        # Iterate through batches of validation/test data
         for batch_num, (feats, labels) in enumerate(val_loader):
-            # Reshape input to match model's expected input shape
+            # Reshape input to (batch, 1 channel, H, W)
             feats = feats.reshape(-1, 1, feature_dim, feature_dim)
             feats, labels = feats.to(device), labels.to(device)
 
-            # Forward pass to get model outputs
+            # Forward pass; model returns (embedding, logits)
             _, outputs = model(feats)
 
-            # Predict labels by taking the class with max softmax score
+            # Predicted class via softmax argmax
             _, pred_labels = torch.max(F.softmax(outputs, dim=1), 1)
             pred_labels = pred_labels.view(-1)
 
-            # Update confusion matrix counts
+            # Update confusion matrix
             for t, p in zip(labels.view(-1), pred_labels):
                 val_confusion_matrix[t.long(), p.long()] += 1
 
-            # Accumulate labels and predictions (moved to CPU) for sklearn metrics
+            # Collect CPU copies for scikit-learn metrics
             all_labels.extend(labels.cpu().numpy())
             all_preds.extend(pred_labels.cpu().numpy())
 
-            # Extract embeddings if available in activation dict
+            # Store hook-captured activations if the hook was registered
             if 'avg_pool' in activation:
                 val_embeddings.append(activation['avg_pool'].detach().cpu().numpy())
 
-            # Calculate batch loss
+            # Compute batch loss and store one entry per sample
             loss = criterion(outputs, labels.long())
             test_loss.extend([loss.item()] * feats.size()[0])
 
-            # Count correct predictions in batch
+            # Accumulate accuracy counts
             accuracy += torch.sum(torch.eq(pred_labels, labels)).item()
             total += len(labels)
 
-            # Free memory by deleting unused variables
+            # Free memory by releasing tensors no longer needed
             del feats, outputs, labels, loss, pred_labels
 
-    # Switch model back to training mode after evaluation
+    # Restore model to training mode so it is ready for the next training epoch
     model.train()
 
-    # Compute average loss and accuracy
+    # Compute aggregate metrics over the full evaluation dataset
     val_loss = np.mean(test_loss) if len(test_loss) > 0 else 0.0
     val_acc  = accuracy / total if total > 0 else 0.0
 
-    # Compute macro precision, recall, and F1 using scikit-learn
+    # Macro-averaged sklearn metrics
     val_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
-    val_recall    = recall_score(all_labels, all_preds, average='macro', zero_division=0)
-    val_f1        = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+    val_recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+    val_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
     return val_confusion_matrix, val_embeddings, val_loss, val_acc, val_precision, val_recall, val_f1
 
+
 def create_results_directories():
     """
-    Creates directories for storing results, accuracies, and losses.
+    Create a clean directory tree for saving training results.
 
-    Behavior:
-    - Uses '/results' if running inside Docker (detected by '/.dockerenv'), otherwise uses a local path.
-    - Deletes existing results directory before creating a fresh one.
-    - Creates subdirectories 'accuracies' and 'losses' inside the results directory.
-    - Prints status messages for each operation.
+    Detects the runtime environment (Docker vs. local) and sets the base path
+    accordingly. Any pre-existing results directory is deleted before the new
+    structure is created.
 
-    Returns:
-        None
+    Directory layout:
+        <base_path>/
+            accuracies/
+            losses/
     """
 
-    # Determine if running inside Docker by checking for '/.dockerenv'
+    # Detect Docker environment via the presence of the sentinel file
     in_docker = os.path.exists('/.dockerenv')
 
-    # Set base results directory accordingly
+    # Choose base results path based on execution environment
     base_path = '/results' if in_docker else '/ocean/projects/bio240001p/arpitha/results'
 
-    # Remove existing results directory if it exists
+    # Remove any pre-existing results directory to avoid stale artefacts
     if os.path.exists(base_path):
         shutil.rmtree(base_path)
         print(f"Directory '{base_path}' has been deleted.")
     else:
         print(f"Directory '{base_path}' does not exist.")
 
-    # Create the base results directory
+    # Recreate the base results directory
     os.makedirs(base_path, exist_ok=True)
     print(f"Directory '{base_path}' created successfully." if os.path.exists(base_path) else f"Failed to create '{base_path}'.")
 
-    # Create accuracies and losses subdirectories
-    for subdir in ['accuracies', 'losses']:
+    # Create subdirectories for accuracy plots and loss plots
+    for subdir in ['accuracies', 'f1_scores', 'losses', 'latency', 'throughput', 'memory']:
         path = os.path.join(base_path, subdir)
         os.makedirs(path, exist_ok=True)
         print(f"Directory '{path}' created successfully." if os.path.exists(path) else f"Failed to create '{path}'.")
 
+
 def plotAccuracy(mode, accuracies):
     """
-    Plot and save the accuracy curve over training or validation time.
+    Plot accuracy over epochs and save the figure to disk.
 
     Args:
-        mode (str): Label describing the accuracy type (e.g., "Training", "Validation").
-        accuracies (list of float): Accuracy values recorded at each time interval (e.g., epoch).
-
-    Behavior:
-        - Creates a line plot of accuracy over time.
-        - Saves the plot as a PNG file in a designated results directory.
+        mode (str): Descriptive label for the split being plotted
+            (e.g. ``"training"`` or ``"validation"``). Used in the plot title,
+            legend, and output filename.
+        accuracies (list[float]): Accuracy value recorded at each epoch.
     """
 
-    # Title for legend and plot window based on mode
+    # Graph title and plot title
     graph_title = mode + " Accuracies"
-    plot_title = mode + " Accuracy Over Time"
+    plot_title  = mode + " Accuracy Over Time"
 
-    # Path where the plot image will be saved
+    # Output path follows the results directory convention
     save_path = f"/ocean/projects/bio240001p/arpitha/results/accuracies/{mode}_accuracy_plot.png"
 
-    # X-axis values representing time intervals (e.g., epochs)
+    # X-axis: epoch indices starting at 1
     time_intervals = list(range(1, len(accuracies) + 1))
 
-    # Set figure size for better visibility
+    # Create the figure
     plt.figure(figsize=(8, 5))
-
-    # Plot accuracy values with markers and line
     plt.plot(time_intervals, accuracies, marker='o', linestyle='-', label=graph_title)
-
-    # Label x-axis (time, epochs, iterations)
     plt.xlabel("Time Intervals")
-
-    # Label y-axis (accuracy values)
     plt.ylabel("Accuracy")
-
-    # Set the title of the plot
     plt.title(plot_title)
-
-    # Show legend to clarify plotted data
     plt.legend()
-
-    # Enable grid for easier visual interpretation
     plt.grid(True)
-
-    # Save the plot to disk
     plt.savefig(save_path)
+
+
+def plotF1Score(mode, f1_scores):
+    """
+    Plot f1 scores over epochs and save the figure to disk.
+
+    Args:
+        mode (str): Descriptive label for the split being plotted
+            (e.g. ``"training"`` or ``"validation"``). Used in the plot title,
+            legend, and output filename.
+        f1_scores (list[float]): F1 score value recorded at each epoch.
+    """
+
+    # Graph title and plot title
+    graph_title = mode + "F1_Scores"
+    plot_title  = mode + " F1 Score Over Time"
+
+    # Output path follows the results directory convention
+    save_path = f"/ocean/projects/bio240001p/arpitha/results/f1_scores/{mode}_f1_plot.png"
+
+    # X-axis: epoch indices starting at 1
+    time_intervals = list(range(1, len(f1_scores) + 1))
+
+    # Create the figure
+    plt.figure(figsize=(8, 5))
+    plt.plot(time_intervals, f1_scores, marker='o', linestyle='-', label=graph_title)
+    plt.xlabel("Time Intervals")
+    plt.ylabel("F1 Scores")
+    plt.title(plot_title)
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(save_path)
+
 
 def plotLoss(mode, losses):
     """
-    Plot and save the loss curve over training or validation time.
+    Plot loss over epochs and save the figure to disk.
 
     Args:
-        mode (str): Label describing the loss type (e.g., "Training", "Validation").
-        losses (list of float): Loss values recorded at each time interval (e.g., epoch).
-
-    Behavior:
-        - Creates a line plot of loss over time.
-        - Saves the plot as a PNG file in a designated results directory.
+        mode (str): Descriptive label for the split being plotted
+            (e.g. ``"training"`` or ``"validation"``). Used in the plot title,
+            legend, and output filename.
+        losses (list[float]): Loss value recorded at each epoch.
     """
 
-    # Title for legend and plot window based on mode
+    # Graph title and plot title
     graph_title = mode + " Losses"
-    plot_title = mode + " Loss Over Time"
+    plot_title  = mode + " Loss Over Time"
 
-    # Path where the plot image will be saved
+    # Output path follows the results directory convention
     save_path = f"/ocean/projects/bio240001p/arpitha/results/losses/{mode}_loss_plot.png"
 
-    # X-axis values representing time intervals (e.g., epochs)
+    # X-axis: epoch indices starting at 1
     time_intervals = list(range(1, len(losses) + 1))
 
-    # Set figure size for better visibility
+    # Create the figure
     plt.figure(figsize=(8, 5))
-
-    # Plot loss values with markers and line
     plt.plot(time_intervals, losses, marker='o', linestyle='-', label=graph_title)
-
-    # Label x-axis (time, epochs, iterations)
     plt.xlabel("Time Intervals")
-
-    # Label y-axis (loss values)
     plt.ylabel("Loss")
-
-    # Set the title of the plot
     plt.title(plot_title)
-
-    # Show legend to clarify plotted data
     plt.legend()
-
-    # Enable grid for easier visual interpretation
     plt.grid(True)
-
-    # Save the plot to disk
     plt.savefig(save_path)
+
+
+def plotLatency(num_gpus, latencies):
+    """
+    Plot latencies per-batch and save the figure to disk.
+
+    Args:
+        num_gpus (int): Number of GPUs used; included in the saved plot filename.
+        latencies (list[float]): Latency values to plot.
+    """
+
+    # Graph title and plot title
+    graph_title = "Latencies"   # Legend label
+    plot_title  = "Latency Over Time"  # Plot title
+
+    # Output path follows the results directory convention
+    save_path = f"/ocean/projects/bio240001p/arpitha/results/latency/{num_gpus}_latency_plot.png"
+
+    # X-axis: time intervals corresponding to each latency measurement
+    time_intervals = list(range(1, len(latencies) + 1))
+
+    # Create the figure
+    plt.figure(figsize=(8, 5))
+    plt.plot(time_intervals, latencies, marker='o', linestyle='-', label=graph_title)
+    plt.xlabel("Batch Intervals")
+    plt.ylabel("Latency (s)")  # Specify units
+    plt.title(plot_title)
+    plt.legend()
+    plt.grid(True)
+    plt.axis(xmin=0, ymin=0)
+    plt.ylim(0, 200)
+    plt.savefig(save_path)
+    plt.close()  # Close the figure to free memory
+
+
+def plotThroughput(num_gpus, throughputs):
+    """
+    Plot throughputs per-batch and save the figure to disk.
+
+    Args:
+        num_gpus (int): Number of GPUs used; included in the saved plot filename.
+        throughputs (list[float]): Throughput values to plot.
+    """
+
+    # Graph title and plot title
+    graph_title = "Throughputs"   # Legend label
+    plot_title  = "Throughput Over Time"  # Plot title
+
+    # Output path follows the results directory convention
+    save_path = f"/ocean/projects/bio240001p/arpitha/results/throughput/{num_gpus}_throughput_plot.png"
+
+    # X-axis: time intervals corresponding to each throughput measurement
+    time_intervals = list(range(1, len(throughputs) + 1))
+
+    # Create the figure
+    plt.figure(figsize=(8, 5))
+    plt.plot(time_intervals, throughputs, marker='o', linestyle='-', label=graph_title)
+    plt.xlabel("Batch Intervals")
+    plt.ylabel("Throughput (samples/sec)")  # Specify units
+    plt.title(plot_title)
+    plt.legend()
+    plt.grid(True)
+    plt.axis(xmin=0, ymin=0)
+    plt.savefig(save_path)
+    plt.close()
+
+
+def plotMemories(num_gpus, peak_mem_per_gpu):
+    """
+    Plot peak GPU memory usage per GPU and save the figure to disk.
+
+    Args:
+        num_gpus (int): Number of GPUs used; included in the saved plot filename.
+        peak_mem_per_gpu (list[float]): Peak memory (in MB) for each GPU to plot.
+    """
+
+    # Graph title and plot title (can include mode if defined globally)
+    graph_title = "Peak GPU Memories"   # Legend label
+    plot_title  = "GPU Memory Usage Over Time"  # Plot title
+
+    # Output path follows the results directory convention
+    save_path = f"/ocean/projects/bio240001p/arpitha/results/memory/{num_gpus}_gpu_memory_plot.png"
+
+    # X-axis: GPU indices (1 to num_gpus) or time intervals if collected per batch
+    gpu_indices = list(range(1, num_gpus + 1))
+
+    # Create the figure
+    plt.figure(figsize=(8, 5))
+    plt.plot(gpu_indices, peak_mem_per_gpu, marker='o', linestyle='-', label=graph_title)
+    plt.xlabel("GPU Index")
+    plt.ylabel("Peak Memory (MB)")  # Specify units
+    plt.title(plot_title)
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(gpu_indices)
+    plt.savefig(save_path)
+    plt.close()
+
 
 def main():
     """
-    Main entry point of the script.
+    Entry point: configure the experiment, run training, evaluate, and save results.
 
-    Responsibilities:
-    - Parses command-line argument '--type' to determine which segmentation patches to process
-      (options: 'tumor', 'nuclei', or 'voronoi').
-    - Sets paths to cancerous and non-cancerous patch directories based on environment (Docker or local).
-    - Loads image patch file paths and counts total images from cancerous and non-cancerous directories.
-    - Splits data into training, validation, and test sets and creates DataLoaders.
-    - Loads the model and device (CPU/GPU).
-    - Sets up a forward hook on a specific model layer to capture embeddings.
-    - Obtains loss function, optimizer, and learning rate scheduler.
-    - Trains the model, collecting embeddings, losses, and accuracies.
-    - Tests the model on the test dataset and prints confusion matrices and performance metrics.
-    - Creates directories for saving results.
-    - Plots and saves accuracy and loss curves for training and validation.
-
-    Returns:
-        tuple: Lists of accuracies for training, validation, and testing datasets.
+    Workflow:
+        1. Parse ``--type`` CLI argument (``"tumor"``, ``"voronoi"``, or ``"context"``)
+           to select which set of segmentation patches to load.
+        2. Resolve patch directory paths for cancerous and non-cancerous images
+           based on the runtime environment (Docker or local HPC).
+        3. Collect image file paths and the total file count across both classes.
+        4. Partition data into train / val / test splits and build DataLoaders.
+        5. Instantiate the modified ResNet18 model and move it to the available device.
+        6. Register a forward hook on layer 8 of the feature extractor to capture
+           ``avg_pool`` activations as embeddings.
+        7. Configure loss, optimiser, and LR scheduler.
+        8. Train the model, collecting per-epoch embeddings, losses, and accuracies.
+        9. Evaluate the trained model on the held-out test set and print all metrics.
+        10. Create results directories and save accuracy / loss plots.
+        11. Print the total script runtime and the final test F1 score.
     """
 
-    # Record the start time of the training run to measure total runtime
+    # Record start time to measure total end-to-end runtime
     start_time = time.time()
 
-    # Parse input argument to choose the segmentation patch type to use
+    # ── CLI argument parsing ───────────────────────────────────────────────────
     parser = argparse.ArgumentParser(description="Segmentation input type")
-    parser.add_argument('--type', type=str, choices=["tumor", "voronoi", "diffusion", "prompt", "context"], required=True)
+    parser.add_argument('--type', type=str, choices=["tumor", "voronoi", "context"], required=True)
     args = parser.parse_args()
 
-    # Determine base paths depending on running inside Docker or locally
+    # ── Resolve patch directory paths ─────────────────────────────────────────
     if os.path.exists('/.dockerenv'):
-        # Docker environment paths for patch directories
+        # Paths inside a Docker container
         if args.type == "tumor":
-            cancer_patches_dir = '/tumor_patches/Cancerous'
+            cancer_patches_dir    = '/tumor_patches/Cancerous'
             no_cancer_patches_dir = '/tumor_patches/NotCancerous'
         elif args.type == "voronoi":
-            cancer_patches_dir = '/voronoi_patches/Cancerous'
+            cancer_patches_dir    = '/voronoi_patches/Cancerous'
             no_cancer_patches_dir = '/voronoi_patches/NotCancerous'
-        elif args.type == "diffusion":
-            cancer_patches_dir = '/diffusion_patches/Cancerous'
-            no_cancer_patches_dir = '/diffusion_patches/NotCancerous'
-        elif args.type == "prompt":
-            cancer_patches_dir = '/prompt_patches/Cancerous'
-            no_cancer_patches_dir = '/prompt_patches/NotCancerous'
         elif args.type == "context":
-            cancer_patches_dir = '/context_patches/Cancerous'
+            cancer_patches_dir    = '/context_patches/Cancerous'
             no_cancer_patches_dir = '/context_patches/NotCancerous'
     else:
-        # Local environment paths
+        # Paths on the local HPC filesystem
         base_path = '/ocean/projects/bio240001p/arpitha'
         if args.type == "tumor":
-            cancer_patches_dir = f'{base_path}/tumor_patches/Cancerous'
+            cancer_patches_dir    = f'{base_path}/tumor_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/tumor_patches/NotCancerous'
         elif args.type == "voronoi":
-            cancer_patches_dir = f'{base_path}/voronoi_patches/Cancerous'
+            cancer_patches_dir    = f'{base_path}/voronoi_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/voronoi_patches/NotCancerous'
-        elif args.type == "diffusion":
-            cancer_patches_dir = f'{base_path}/diffusion_patches/Cancerous'
-            no_cancer_patches_dir = f'{base_path}/diffusion_patches/NotCancerous'
-        elif args.type == "prompt":
-            cancer_patches_dir = f'{base_path}/prompt_patches/Cancerous'
-            no_cancer_patches_dir = f'{base_path}/prompt_patches/NotCancerous'
         elif args.type == "context":
-            cancer_patches_dir = f'{base_path}/context_patches/Cancerous'
+            cancer_patches_dir    = f'{base_path}/context_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/context_patches/NotCancerous'
 
-    # Initialize dictionary and counter to hold image patch paths and total image count
+    # ── Collect image patch metadata ──────────────────────────────────────────
     image_patches = {}
     total_image_count = 0
 
-    # Load image patches from cancerous and non-cancerous directories and update total count
+    # Load file paths from both class directories and accumulate the running count
     image_patches, total_image_count = get_patch_files(cancer_patches_dir, image_patches, total_image_count)
     image_patches, total_image_count = get_patch_files(no_cancer_patches_dir, image_patches, total_image_count)
 
-    # Split data into train, val, test sets with DataLoaders
+    # ── Data splitting and DataLoader creation ────────────────────────────────
     train_loader, val_loader, test_loader = splitting_data(image_patches, total_image_count)
 
-    # Load model and assign device (CPU or GPU)
-    device, model = load_model()
+    # ── Model instantiation ───────────────────────────────────────────────────
+    device, model = load_model(args.type)
 
-    # Print the primary device where the model is loaded
     print(f"Model loaded on device: {device}")
-
-    # Print the total number of GPUs available to PyTorch
     print(f"Number of GPUs available: {torch.cuda.device_count()}")
 
-    # If multiple GPUs are available, print details about each one
+    # Log per-GPU details when multiple GPUs are in use
     if torch.cuda.device_count() > 1:
         print("GPU Details:")
-        # Loop through each GPU and print its index and name
         for i in range(torch.cuda.device_count()):
             print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
 
-    # Get hook function to capture embeddings from 'avg_pool' layer
+    # ── Forward hook for embedding extraction ─────────────────────────────────
+    # The hook captures the output of layer index 8 in the feature extractor
+    # (the adaptive average-pool layer) and stores it in the global `activation` dict.
     hook_function = get_activation('avg_pool', activation)
 
-    # Register hook on the model's specific layer to capture features during forward pass
-    # Access the underlying model when using DataParallel
     if torch.cuda.device_count() > 1:
+        # DataParallel wraps the model; access the underlying module's layer
         model.module.features[8].register_forward_hook(hook_function)
     else:
         model.features[8].register_forward_hook(hook_function)
 
-    # Setup loss criterion, optimizer, and scheduler for training
+    # ── Optimiser and scheduler setup ─────────────────────────────────────────
     criterion, optimizer, scheduler = get_params(model)
 
-    # Record time immediately before training starts
-    mid_time1 = time.time()
+    # ── Training ──────────────────────────────────────────────────────────────
+    all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, \
+    all_train_acc, all_val_acc, all_train_f1, all_val_f1, batch_latencies, \
+    batch_throughputs = train(model, device, train_loader, val_loader, criterion, optimizer, scheduler)
 
-    # Calculate the time spent in setup/preprocessing
-    setup_time = mid_time1 - start_time
+    # ── Test evaluation ───────────────────────────────────────────────────────
+    test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc, test_precision, \
+    test_recall, test_f1 = testing(model, device, test_loader, criterion)
 
-    # Print the setup/preprocessing time in seconds
-    print("Time Before Training: {:.2f} seconds".format(setup_time))
-
-    # Train the model and collect embeddings, loss, accuracy metrics
-    all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc = train(
-        model, device, train_loader, val_loader, criterion, optimizer, scheduler
-    )
-
-    # Test the model on the test dataset and collect metrics (now returns precision, recall, f1 too)
-    test_confusion_matrix, all_test_embeddings, all_test_loss, all_test_acc, test_precision, test_recall, test_f1 = testing(
-        model, device, test_loader, criterion
-    )
-
-    # Record time immediately after training and testing finishes
-    mid_time2 = time.time()
-
-    # Calculate the total training time
-    training_time = mid_time2 - mid_time1
-
-    # Print the training time in seconds
-    print("Training Time: {:.2f} seconds".format(training_time))
-
-    # Print all test metrics including precision, recall, and F1
+    # Print all test-set metrics
     print(f'Average Testing Loss: {all_test_loss:.4f} | '
           f'Accuracy: {all_test_acc:.4f} | Precision: {test_precision:.4f} | '
           f'Recall: {test_recall:.4f} | F1: {test_f1:.4f}')
 
-    # Print confusion matrix and normalized per-class accuracy
+    # Print test confusion matrix and per-class (normalised) accuracy
     print("Testing Confusion Matrix:\n", test_confusion_matrix)
     print("Testing Normalized Confusion Matrix (per-class accuracy):\n",
           test_confusion_matrix.diag() / test_confusion_matrix.sum(1))
 
-    # Create directories to save results, accuracies, and losses
+    # ── Log / Print Training Metrics ───────────────────────────────────────────
+    # Get the number of GPUs available
+    num_gpus = torch.cuda.device_count()
+
+    # Record the peak GPU memory used on each GPU during this run (in MB)
+    peak_mem_per_gpu = [torch.cuda.max_memory_allocated(i) / 1024**2 for i in range(num_gpus)]
+
+    # # Print training metrics
+    # # - batch_latencies: list of per-batch latencies
+    # # - batch_throughputs: list of per-batch throughput
+    # # - peak_mem_per_gpu: max memory used per GPU during the run
+    # print(f"Latency: {batch_latencies}\n"
+    #       f"Throughput: {batch_throughputs}\n"
+    #       f"Memory Usage Per GPU: {peak_mem_per_gpu}\n")
+
+    # ── Save results ──────────────────────────────────────────────────────────
     create_results_directories()
 
-    # Plot and save accuracy curves for training and validation
-    plotAccuracy("training", all_train_acc)
-    plotAccuracy("validation", all_val_acc)
+    # Accuracy plots
+    plotAccuracy("training", all_train_acc)      # Plot training accuracy per epoch
+    plotAccuracy("validation", all_val_acc)     # Plot validation accuracy per epoch
 
-    # Plot and save loss curves for training and validation
-    plotLoss("training", all_train_loss)
-    plotLoss("validation", all_val_loss)
+    # F1 score plots
+    plotF1Score("training", all_train_f1)       # Plot training macro F1 per epoch
+    plotF1Score("validation", all_val_f1)       # Plot validation macro F1 per epoch
 
-    # Record the end time immediately after metrics calculation
+    # Loss plots
+    plotLoss("training", all_train_loss)        # Plot training loss per epoch
+    plotLoss("validation", all_val_loss)        # Plot validation loss per epoch
+
+    # Timing / Performance plots
+    plotLatency(num_gpus, batch_latencies)      # Plot batch latencies over time
+    plotThroughput(num_gpus, batch_throughputs) # Plot batch throughput over time
+
+    # GPU memory usage plot
+    plotMemories(num_gpus, peak_mem_per_gpu)    # Plot peak memory usage per GPU
+
+    # ── Runtime summary ───────────────────────────────────────────────────────
     end_time = time.time()
-
-    # Calculate time spent on metrics calculation
-    metrics_time = end_time - mid_time2
-    print("Time Spent on Metrics Calculation: {:.2f} seconds".format(metrics_time))
-
-    # Calculate total runtime of the entire script
     total_time = end_time - start_time
     print("Total Script Runtime: {:.2f} seconds".format(total_time))
 
-    # Print final test F1 score
+    # Final test F1 score (also useful for hyperparameter search scripts that parse stdout)
     print(test_f1)
+
 
 if __name__ == "__main__":
     main()
