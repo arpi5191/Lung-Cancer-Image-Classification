@@ -14,6 +14,7 @@
 
 import os
 import cv2
+import time
 import torch
 import shutil
 import random
@@ -531,6 +532,9 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
         - ControlNet uses a Canny edge map of a real image as structural guidance.
         - Each generated image is conditioned on one real image's edge map.
     """
+    # Initialize the total latency
+    total_latency = 0
+
     for class_idx in range(len(classifications)):
         print(f"\n{'='*60}")
         print(f"Generating {num_images[class_idx]} images for class: {classifications[class_idx]}")
@@ -605,6 +609,11 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
             # Different seed per image for variety, but reproducible across runs
             generator = torch.Generator(device=device).manual_seed(42 + img_idx)
 
+            # Start timing per-image generation
+            # Ensure all previous GPU ops are finished
+            torch.cuda.synchronize()
+            start = time.time()
+
             # -----------------------------------------
             # Generate the synthetic image.
             #
@@ -628,6 +637,14 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
                         height=512,
                         generator=generator
                     )
+
+            # Wait for all GPU ops in this pipeline call to finish
+            torch.cuda.synchronize()
+            end = time.time()
+
+            # Compute latency
+            latency = end - start                # seconds per image
+            total_latency += latency
 
             image = result.images[0]
 
@@ -665,6 +682,14 @@ def train_model(pipe, device, output_dir, classifications, prompts, negative_pro
             # sequentially on a shared HPC node
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+    # Compute and print the average throughput across all generated images
+    # Throughput is defined as images processed per second
+    # total_latency is the sum of all per-batch or per-image latencies
+    print()
+    average_throughput = sum(num_images) / total_latency
+    print(f"Average Throughput: {average_throughput:.6f} images/sec")
+    print()
 
     print(f"\n{'='*60}")
     print(f"All {sum(num_images)} images saved to {output_dir}")
@@ -847,7 +872,7 @@ def main():
         classifications = classifications,
         prompts         = prompts,
         output_dir      = output_dir,
-        num_epochs      = 5,
+        num_epochs      = 30,
         lr              = 1e-4
     )
 
@@ -880,7 +905,6 @@ def main():
         pipe, device, output_dir, classifications,
         prompts, negative_prompts, num_images, gen_loaders
     )
-
 
 if __name__ == "__main__":
     main()

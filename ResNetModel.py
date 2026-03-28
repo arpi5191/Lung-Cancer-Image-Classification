@@ -51,16 +51,6 @@ num_classes = 2
 # Populated during each forward pass so embeddings can be retrieved outside the model.
 activation = {}
 
-# # Set a random seed for full reproducibility
-# seed = 42
-# random.seed(seed)
-# np.random.seed(seed)
-# torch.manual_seed(seed)
-# torch.cuda.manual_seed_all(seed)
-# torch.backends.cudnn.deterministic = True
-# torch.backends.cudnn.benchmark = False
-
-
 def get_patch_files(patches_dir, image_patches, total_image_count):
     """
     Collect image patch file paths from every subdirectory inside `patches_dir`.
@@ -700,6 +690,7 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
             feats, labels = feats.to(device), labels.to(device)
 
             # Start time
+            torch.cuda.synchronize()
             batch_start = time.time()
 
             # Clear gradients from the previous iteration
@@ -734,6 +725,7 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
             optimizer.step()
 
             # Record batch wall-clock time and throughput
+            torch.cuda.synchronize()
             batch_time = time.time() - batch_start
             batch_latencies.append(batch_time * 1000)
             batch_throughputs.append(feats.size(0) / batch_time)
@@ -1166,6 +1158,15 @@ def main():
         11. Print the total script runtime and the final test F1 score.
     """
 
+    # Set a random seed for full reproducibility
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     # Record start time to measure total end-to-end runtime
     start_time = time.time()
 
@@ -1291,6 +1292,40 @@ def main():
 
     # GPU memory usage plot
     plotMemories(num_gpus, peak_mem_per_gpu)    # Plot peak memory usage per GPU
+
+    # ── Save GPU Performance Metrics to CSV ──────────────────────────────────────────────────────────
+    # Compute the average latency across all batches
+    # np.sum(batch_latencies) sums the latencies for each batch
+    # np.mean(...) calculates the mean of these sums
+    average_latency = np.mean(np.sum(batch_latencies))
+
+    # Compute the average throughput across all batches
+    # np.sum(batch_throughputs) sums throughput values per batch
+    # np.mean(...) calculates the average throughput
+    average_throughput = np.mean(np.sum(batch_throughputs))
+
+    # Compute the average peak memory usage per GPU
+    # np.sum(peak_mem_per_gpu) sums memory usage per GPU
+    # np.mean(...) calculates the average memory usage
+    average_memory = np.mean(np.sum(peak_mem_per_gpu))
+
+    # Create a pandas DataFrame to organize the metrics
+    # Each metric is placed in a list to make a single-row DataFrame
+    df = pd.DataFrame({
+         "Number of GPUs": [num_gpus],
+         "Average Latencies": [average_latency],
+         "Average Throughputs": [average_throughput],
+         "Average Memories": [average_memory]
+    })
+
+    # Define the folder path
+    folder_path = "gpu_metrics"
+
+    # Save the DataFrame to CSV
+    csv_path = os.path.join(folder_path, "gpu_metrics.csv")
+    df.to_csv(csv_path, mode='a', index=False, header=not os.path.exists(csv_path))
+
+    print(f"CSV saved at: {csv_path}")
 
     # ── Runtime summary ───────────────────────────────────────────────────────
     end_time = time.time()

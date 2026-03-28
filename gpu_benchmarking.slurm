@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH -N 1
-#SBATCH --job-name=resnet_test
-#SBATCH --output=resnet_out.txt
-#SBATCH --error=resnet_err.txt
-#SBATCH --gres=gpu:2
+#SBATCH --job-name=resnet_gpu_test
+#SBATCH --output=resnet_gpu_out.txt
+#SBATCH --error=resnet_gpu_err.txt
+#SBATCH --gres=gpu:4
 #SBATCH --time=01:00:00
 #SBATCH --mem=16G
 #SBATCH --partition=GPU-shared
@@ -29,60 +29,57 @@ source /opt/packages/anaconda3-2024.10-1/etc/profile.d/conda.sh
 # ----------------------------
 export CONDA_PKGS_DIRS=/ocean/projects/bio240001p/arpitha/conda_pkgs
 export CONDA_ENVS_DIRS=/ocean/projects/bio240001p/arpitha/conda_envs
-mkdir -p $CONDA_PKGS_DIRS $CONDA_ENVS_DIRS
+mkdir -p "$CONDA_PKGS_DIRS" "$CONDA_ENVS_DIRS"
 
 # ----------------------------
-# Clean caches
+# Create fresh Conda environment (optional)
 # ----------------------------
-# echo "Cleaning conda and pip cache..."
-# conda clean --all -y
-# pip cache purge
-
-# ----------------------------
-# Create fresh Conda environment
-# ----------------------------
+# Uncomment if you want to create a new environment each run
 # echo "Creating new conda environment..."
 # conda create -p /ocean/projects/bio240001p/arpitha/conda_envs/myenv python=3.10 -y
+
+# ----------------------------
+# Activate Conda environment
+# ----------------------------
 conda activate /ocean/projects/bio240001p/arpitha/conda_envs/myenv
 
 # ----------------------------
-# Install packages
+# Install packages (optional)
 # ----------------------------
+# Uncomment if you need to install packages each run
 # echo "Installing packages from requirements.txt..."
 # pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 # pip install --no-cache-dir --timeout=600 -r requirements.txt
 
 # ----------------------------
-# Set GPU visibility
+# Prepare GPU metrics folder
 # ----------------------------
-export CUDA_VISIBLE_DEVICES=0,1
-# export CUDA_VISIBLE_DEVICES=0,1,2,3
-# nvidia-smi
+FOLDER="results/gpu_metrics"
+
+rm -rf gpu_metrics && mkdir -p gpu_metrics
+echo "Folder reset: results/gpu_metrics"
+
+# -----------------------------
+# Run the ResNetModel.py script with different GPU workloads
+# Loops over 1 to 4 GPUs and sets CUDA_VISIBLE_DEVICES
+# -----------------------------
+for NGPU in 1 2 3 4; do
+    # Create a comma-separated list of GPU indices for this run
+    CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((NGPU - 1)))
+    export CUDA_VISIBLE_DEVICES
+
+    # Print which GPUs are being used
+    echo "Running with $NGPU GPU(s): $CUDA_VISIBLE_DEVICES"
+
+    # Run the training script with the specified GPU setup
+    python ResNetModel.py --type context
+done
 
 # ----------------------------
-# Run segmentation scripts
+# Graph GPU metrics
 # ----------------------------
-# python tumor_seg.py --didx 0 --d 2
-# python voronoi_seg.py
-# python context_seg.py
-
-# ----------------------------
-# Extract patches
-# ----------------------------
-# python extract_patches.py --type tumor
-# python extract_patches.py --type voronoi
-# python extract_patches.py --type context
-
-# ----------------------------
-# Make the compare_models script executable and run the ResNet simulations
-# This will run all patch tests and perform Wilcoxon statistical comparisons
-# ----------------------------
-python ResNetModel.py --type context
-# chmod +x compare_models.sh
-# ./compare_models.sh
-
-echo ""
-echo "All steps completed successfully!"
+# Run the plotting script
+python gpu_plots.py
 
 # ----------------------------
 # Deactivate environment
