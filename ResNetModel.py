@@ -269,7 +269,7 @@ def define_val_test_transformer():
     return transform
 
 
-def sampler(dataset, count, size=1000):
+def sampler(dataset, count, size=100):
     """
     Build a ``WeightedRandomSampler`` that balances class representation per epoch.
 
@@ -404,9 +404,12 @@ def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio
     weighted_sampler = sampler(train_dataset, cur_train_count)
 
     # Training DataLoader uses the weighted sampler; val/test use default sequential order
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler,
+                              num_workers=4, pin_memory=True, persistent_workers=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size,
+                            num_workers=4, pin_memory=True, persistent_workers=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size,
+                             num_workers=4, pin_memory=True, persistent_workers=True)
 
     return train_loader, val_loader, test_loader
 
@@ -492,7 +495,6 @@ class ModelEmbedding(nn.Module):
         else:
             # Classify from the embedding output (embedding layer is part of the path)
             out = self.finlinear(embedding_out)
-            print("NOT")
 
         # Return both the embedding vector and the classification logits
         return embedding_out, out
@@ -578,7 +580,7 @@ def get_activation(name, activation):
     return hook
 
 
-def get_params(model, learningRate=1e-4, weight_decay=1e-5, momentum=0.70, factor=0.5, patience=3):
+def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.70, factor=0.5, patience=3):
     """
     Configure and return the loss function, optimiser, and learning-rate scheduler.
 
@@ -612,7 +614,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-5, momentum=0.70, facto
 
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=45, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=50, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[],
           all_train_f1 = [], all_val_f1 = []):
     """
@@ -683,11 +685,11 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
 
         # ── Batch loop ─────────────────────────────────────────────────────────
         for batch_num, (feats, labels) in enumerate(train_loader):
-            # Reshape to (batch, 1 channel, H, W) expected by the model
-            feats = feats.reshape(-1, 1, feature_dim, feature_dim)
-
             # Transfer data to the computation device
             feats, labels = feats.to(device), labels.to(device)
+
+            # Reshape to (batch, 1 channel, H, W) expected by the model
+            feats = feats.reshape(-1, 1, feature_dim, feature_dim)
 
             # Start time
             torch.cuda.synchronize()
@@ -748,11 +750,11 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
                 print(f'Training Epoch: {epoch + 1}\tBatch: {batch_num + 1}\tAvg-Loss: {avg_loss / 8:.4f}')
                 avg_loss = 0.0  # Reset after logging
 
-            # Release cached GPU memory to avoid fragmentation
-            torch.cuda.empty_cache()
-
             # Explicitly delete tensors that are no longer needed this iteration
             del feats, labels, loss, outputs
+
+        # Release cached GPU memory to avoid fragmentation
+        torch.cuda.empty_cache()
 
         # ── Epoch-level training metrics ───────────────────────────────────────
         avg_train_loss = np.mean(epoch_train_loss) if len(epoch_train_loss) > 0 else 0.0
@@ -1158,14 +1160,14 @@ def main():
         11. Print the total script runtime and the final test F1 score.
     """
 
-    # Set a random seed for full reproducibility
-    seed = 42
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # # Set a random seed for full reproducibility
+    # seed = 42
+    # random.seed(seed)
+    # np.random.seed(seed)
+    # torch.manual_seed(seed)
+    # torch.cuda.manual_seed_all(seed)
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
 
     # Record start time to measure total end-to-end runtime
     start_time = time.time()
