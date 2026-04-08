@@ -313,7 +313,7 @@ def sampler(dataset, count, size=100):
     return weighted_sampler
 
 
-def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=8):
+def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=16):
     """
     Partition image patch directories into train / val / test splits and return DataLoaders.
 
@@ -489,7 +489,7 @@ class ModelEmbedding(nn.Module):
         # Compute the embedding vector via a linear transform followed by ReLU
         embedding_out = self.relu(self.linear(embedding))
 
-        if self.data_type in ["tumor", "context"]:
+        if self.data_type in ["tumor", "synthetic"]:
             # Classify directly from the raw flattened features (no embedding layer in path)
             out = self.finlinear(embedding)
         else:
@@ -1160,7 +1160,7 @@ def main():
         11. Print the total script runtime and the final test F1 score.
     """
 
-    # # Set a random seed for full reproducibility
+    # Set a random seed for full reproducibility
     # seed = 42
     # random.seed(seed)
     # np.random.seed(seed)
@@ -1174,7 +1174,7 @@ def main():
 
     # ── CLI argument parsing ───────────────────────────────────────────────────
     parser = argparse.ArgumentParser(description="Segmentation input type")
-    parser.add_argument('--type', type=str, choices=["tumor", "voronoi", "context"], required=True)
+    parser.add_argument('--type', type=str, choices=["tumor", "voronoi", "synthetic"], required=True)
     args = parser.parse_args()
 
     # ── Resolve patch directory paths ─────────────────────────────────────────
@@ -1186,7 +1186,7 @@ def main():
         elif args.type == "voronoi":
             cancer_patches_dir    = '/voronoi_patches/Cancerous'
             no_cancer_patches_dir = '/voronoi_patches/NotCancerous'
-        elif args.type == "context":
+        elif args.type == "synthetic":
             cancer_patches_dir    = '/context_patches/Cancerous'
             no_cancer_patches_dir = '/context_patches/NotCancerous'
     else:
@@ -1198,7 +1198,7 @@ def main():
         elif args.type == "voronoi":
             cancer_patches_dir    = f'{base_path}/voronoi_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/voronoi_patches/NotCancerous'
-        elif args.type == "context":
+        elif args.type == "synthetic":
             cancer_patches_dir    = f'{base_path}/context_patches/Cancerous'
             no_cancer_patches_dir = f'{base_path}/context_patches/NotCancerous'
 
