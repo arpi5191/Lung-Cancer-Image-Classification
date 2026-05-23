@@ -87,6 +87,14 @@ def biological_auditor_node_knowledge(state: AgentState):
     Purpose:
     - Establish an initial baseline of visually concrete anatomical/pathological features.
     - Provide raw generation material to act as a fallback/comparison for literature searches.
+
+    Args:
+        state (AgentState): The current graph state containing 'anatomy',
+                            'disease', and 'image_type'.
+
+    Returns:
+        dict: A state update dictionary containing 'medical_details', populated with
+              a clean list of parsed, non-duplicate clinical term and description strings.
     """
 
     # ---------------- SUMMARIZATION PROMPT ---------------- #
@@ -209,6 +217,15 @@ def filter_node(state: AgentState):
     Iterates through each biomedical detail using a native Python loop to bypass
     LLM contextual laziness, evaluating presence on a single-item basis to filter
     out redundant or already-described terms.
+
+    Args:
+        state (AgentState): The current graph state containing 'medical_details'
+                            and 'current_prompt'.
+
+    Returns:
+        dict: A state update dictionary containing 'medical_details', updated to
+              include only the subset of detail strings that are completely
+              absent or missing from the current prompt draft.
     """
 
     # Extract the current details list and fallback to an empty array if missing
@@ -239,8 +256,10 @@ def filter_node(state: AgentState):
 
 
         INSTRUCTIONS:
+
         Scan the PROMPT TO SCAN to see if the DETAIL TO CHECK keyword or concept is already written, mentioned, or
         explicitly included in the text.
+
 
         OUTPUT FORMAT:
         - If the concept or keyword is written or mentioned, return exactly: PRESENT
@@ -279,6 +298,15 @@ def clinical_prioritization_node(state: AgentState):
     acting as a clinical imaging specialist. Features are tagged based on relevance
     thresholds and sorted in descending order to guarantee that downstream prompt optimization
     prioritizes the most pathognomonic and visually critical radiological elements.
+
+    Args:
+        state (AgentState): The current graph state containing 'medical_details',
+                            'anatomy', 'disease', and 'image_type'.
+
+    Returns:
+        dict: A state update dictionary containing 'medical_details', updated to a
+              prioritized list of detail strings tagged with [HIGH RELEVANCE] or
+              [LOW RELEVANCE] and sorted in descending order by score.
     """
 
     # Extract the current details list from state, fallback to an empty array if missing
@@ -301,6 +329,7 @@ def clinical_prioritization_node(state: AgentState):
         # Format a highly specific evaluation prompt context for the LLM
         user_prompt = f"""
         REFERENCE DATA:
+
         Anatomy: {state['anatomy']}
         Disease: {state['disease']}
         Image Type: {state['image_type']}
@@ -308,30 +337,32 @@ def clinical_prioritization_node(state: AgentState):
         DETAIL TO EVALUATE:
         "{detail}"
 
+
         INSTRUCTIONS:
-        Rate how important this feature is for a diffusion model to generate a realistic medical image.
-        You must classify this feature into exactly one of the four categories below. Be highly critical.
 
-        [4] = CORE SHAPE & LAYER STRUCTURE
-        - Mandatory macro-geometry.
-        - Without this, the structural backbone of the image is wrong.
+        You are a strict data classifier. Follow these exact steps for every REQUIREMENT TO EVALUATE:
 
-        [3] = KEY VISUAL HALLMARKS
-        - High-yield diagnostic features.
-        - Highly prominent and visually striking, but sits inside the primary macro-geometry.
+        STEP 1: EVALUATE FINE-GRAINED & LOCAL ATTRIBUTES
+        - If the requirement focuses on micro-environmental details (e.g., individual cell morphology, cellular
+          texture, technical noise, background debris, or isolated staining/imaging artifacts): Classify as [1].
 
-        [2] = BACKGROUND MICRO-FEATURES
-        - Micro-level details.
-        - Visually present, but does not dictate the major regional layout of the target image.
+        STEP 2: EVALUATE GLOBAL CLINICAL SIGNIFICANCE
+        - If the requirement does not satisfy STEP 1: Classify as [2]
 
-        [1] = GENERIC / VISUALLY NEGLIGIBLE
-        - Vague or common details.
-        - Extremely non-specific, faint, or has low visual distinction on an image scan.
+
 
         OUTPUT FORMAT:
-        Return exactly a single integer: 1, 2, 3, or 4.
+
+        Return exactly a single integer: 1 or 2.
+
         Do not include any conversational text, decimals, letters, punctuation, or markdown code fences.
         """
+
+
+# If the requirement describes CORE STRUCTURAL ARCHITECTURE (e.g., organ-specific tissue organization, major
+#   anatomical boundaries, overall lesion layout, or defining spatial patterns that characterize the primary
+#   clinical finding):
+#   Classify as [2].
 
         # Invoke the language model for a single-element scoring pass
         response = llm.invoke([
@@ -342,14 +373,14 @@ def clinical_prioritization_node(state: AgentState):
         # Clean up output string text before attempting numeric translation
         score_str = response.content.strip()
 
-        # CRITICAL FIX: Safe float casting to protect against arbitrary LLM string returns
+        # Safe int casting to protect against arbitrary LLM string returns
         try:
             score_val = float(score_str)
         except ValueError:
-            score_val = 0.0  # Safe fallback default value for non-numeric parser failures
+            score_val = 0  # Safe fallback default value for non-numeric parser failures
 
         # Append visual categorization metadata based on the numerical cutoff threshold
-        if score_val >= 3.0:
+        if score_val >= 1:
             final_detail = f"{detail} [HIGH RELEVANCE]"
         else:
             final_detail = f"{detail} [LOW RELEVANCE]"
@@ -359,7 +390,7 @@ def clinical_prioritization_node(state: AgentState):
 
         # # Iteration Diagnositics
         # print(f"\n[Evaluating Detail]: {detail}")
-        # print(f" -> Assigned Score : {score_val:.1f}/10.0")
+        # print(f" -> Assigned Score : {score_val:.1f}/4")
         # print(f" -> Tagged Output  : {final_detail}")
         # print("-" * 50)
 
@@ -385,6 +416,14 @@ def medical_prompt_optimization_node(state: AgentState):
         and baseline user prompts. It isolates diagnostic criteria (e.g., tissue structures,
         pathological anomalies) and converts them into a clean JSON array of strings
         for downstream generation and evaluation layers.
+
+        Args:
+            state (AgentState): The current graph state containing 'current_prompt'
+                                as well as any global clinical identifiers.
+
+        Returns:
+            dict: A state update dictionary containing 'medical_requirements', a clean
+                  list of parsed raw string criteria extracted from the target text.
         """
 
         # ---------------- SYSTEM PROMPT CONFIGURATION ---------------- #
@@ -402,6 +441,7 @@ def medical_prompt_optimization_node(state: AgentState):
 
             Scan the PROMPT TO PARSE to extract specific requirements that the diffusion model must express to
             generate accurate medical images.
+
 
             OUTPUT FORMAT:
 
@@ -434,3 +474,116 @@ def medical_prompt_optimization_node(state: AgentState):
         return {
             "medical_requirements": parsed_list
         }
+
+# ---------------- REQUIREMENT PRIORITIZATION NODE ---------------- #
+def requirement_prioritization_node(state: AgentState):
+    """
+    Evaluates and ranks the explicit baseline medical requirements currently present in the state.
+
+    This node executes a deterministic loop over each active prompt requirement, invoking
+    the LLM to score its visual relevance (Tiers 1-4) based on its macro-geometric or micro-textural
+    impact on diffusion model image generation. The final prioritized array overrides the
+    baseline state list for downstream generation and validation.
+
+    Args:
+        state (AgentState): The current graph state containing 'medical_requirements',
+                            'anatomy', 'disease', and 'image_type'.
+
+    Returns:
+        dict: A state update dictionary containing the prioritized list of requirements
+              tagged with [HIGH RELEVANCE] or [LOW RELEVANCE], sorted in descending order.
+    """
+
+    medical_requirements = state.get("medical_requirements", [])
+
+    requirement_scores = dict()
+
+    # ---------------- SYSTEM PROMPT CONFIGURATION ---------------- #
+    # Configure the structural persona; keep text clean to avoid trailing token padding
+    system_prompt = (
+        "You are a clinical imaging specialist. Your only job is to provide a ranking on how relevant the requirement "
+        "is for medical image generation."
+    )
+
+    # Execute a deterministic serial loop in Python to guarantee 100% list coverage
+    for requirement in medical_requirements:
+
+        # ---------------- USER PROMPT CONFIGURATION ---------------- #
+        # Format a highly specific evaluation prompt context for the LLM
+        user_prompt = f"""
+        REFERENCE DATA:
+
+        Anatomy: {state['anatomy']}
+        Disease: {state['disease']}
+        Image Type: {state['image_type']}
+
+        REQUIREMENT TO EVALUATE:
+        "{requirement}"
+
+
+        INSTRUCTIONS:
+
+        You are a strict data classifier. Follow these exact steps for every REQUIREMENT TO EVALUATE:
+
+        STEP 1: Check if the requirement describes any of the following:
+        - Minor details, granular features, fine-grained attributes, background artifacts, dust, coverslip lines,
+          incidental blood cells, or localized staining variations.
+        - If YES: Classify as [1].
+
+        STEP 2: If it did not meet the criteria in STEP 1, check if the requirement describes:
+        - Global macro-structural layout or core diagnostic hallmarks (e.g., irregular gland borders, malignant cell
+          clusters).
+        - If YES: Classify as [2].
+
+        CRITICAL: If a requirement contains medical terms but describes localized or incidental components, it must be
+                  classified as [1].
+
+
+        OUTPUT FORMAT:
+
+        Return exactly a single integer: 1 or 2.
+
+        Do not include any conversational text, decimals, letters, punctuation, or markdown code fences.
+        """
+
+        # Invoke the language model for a single-element scoring pass
+        response = llm.invoke([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ])
+
+        # Clean up output string text before attempting numeric translation
+        score_str = response.content.strip()
+
+        # Handle potential LLM parser deviations safely using floats
+        try:
+            score_val = float(score_str)
+        except ValueError:
+            score_val = 0
+
+        # Segment the clinical specifications into clear high/low binary action bins
+        if score_val > 1:
+            final_requirement = f"{requirement} [HIGH RELEVANCE]"
+        else:
+            final_requirement = f"{requirement} [LOW RELEVANCE]"
+
+        requirement_scores[final_requirement] = score_val
+
+        # Iteration Diagnostics
+        # FIX: Corrected maximum scale boundary display string from '/10.0' to '/4.0' to map to your rubric rules
+        # print(f"\n[Evaluating Requirement]: {requirement}")
+        # print(f" -> Assigned Score : {score_val:.1f}/2.0")
+        # print(f" -> Tagged Output  : {final_requirement}")
+        # print("-" * 50)
+
+    # Sort the dictionary by scores in descending order
+    sorted_requirement_scores = dict(sorted(requirement_scores.items(), key=lambda item: item[1], reverse=True))
+
+    # Extract just the sorted string keys to overwrite the state's requirement list
+    ranked_medical_requirements = list(sorted_requirement_scores.keys())
+
+    # ---------------- STATE UPDATE ---------------- #
+    # Return the prioritized array back to the graph state
+    return {
+        "medical_requirements": ranked_medical_requirements
+    }
