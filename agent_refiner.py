@@ -30,8 +30,8 @@ pubmed = PubmedQueryRun()
 
 # ---------------- LANGCHAIN GROQ CLIENT ---------------- #
 # Primary LLM used throughout the workflow.
-llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.environ.get("GROQ_API_KEY"), temperature=0.0)
-# llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.environ.get("GROQ_API_KEY"), temperature=0.0)
+# llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.environ.get("GROQ_API_KEY"), temperature=0.0)
+llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.environ.get("GROQ_API_KEY"), temperature=0.0)
 
 
 # ---------------- STATE ---------------- #
@@ -56,30 +56,98 @@ class AgentState(TypedDict):
     image_type: str  # medical imaging modality/domain (CT, MRI, Histopathology, etc.)
 
     # ---------------- LITERATURE GROUNDING---------------- #
-    errors: list[str]  # structured mappings of baseline medical prompt errors
     medical_requirements: list[str]  # Structured clinical requirements generated to steer prompt optimization
     medical_details: list[str]  # Combined array of knowledge-synthesized and PubMed-retrieved visual features
 
-    # ---------------- VALIDATOR OUTPUT ---------------- #
-    feedback: str  # validator-generated critique and improvement suggestions
+    # ---------------- AUDIT FINDINGS ---------------- #
+    present_medical_requirements: list[str]  # Successfully validated clinical requirements found in the prompt
+    missing_medical_requirements: list[str]  # Unmet clinical requirements requiring generator attention
+    present_medical_details: list[str]  # Validated PubMed-derived features present in the current prompt
+    missing_medical_details: list[str]  # Omitted PubMed-derived features that should be integrated
 
     # ---------------- CURRENT WORKING PROMPT ---------------- #
     current_prompt: str  # actively evolving prompt used in current iteration
-    current_token_count: int  # CLIP token length of current prompt
+    current_token_count: float  # CLIP token length of current prompt
     current_score: float  # validator score assigned to current prompt
 
     # ---------------- BEST OVERALL PROMPT ---------------- #
     best_prompt: str  # highest-scoring prompt discovered so far
-    best_token_count: int  # CLIP token count of best overall prompt
+    best_token_count: float  # CLIP token count of best overall prompt
     best_score: float  # highest score achieved across all prompts
 
     # ---------------- BEST VALID PROMPT ---------------- #
     best_valid_prompt: str  # best prompt satisfying diffusion token constraint
-    best_valid_token_count: int  # CLIP token count of best valid prompt
+    best_valid_token_count: float  # CLIP token count of best valid prompt
     best_valid_score: float  # highest score among token-valid prompts
 
 
-# ---------------- BIOLOGICAL AUDITOR NODE (PHASE 1) ---------------- #
+# ---------------- MEDICAL PROMPT OPTIMIZATION NODE ---------------- #
+def medical_prompt_optimization_node(state: AgentState):
+        """
+        Extracts explicit visual and structural clinical requirements from reference data.
+
+        Acts as an Information Extraction Agent that parses dense biomedical literature
+        and baseline user prompts. It isolates diagnostic criteria (e.g., tissue structures,
+        pathological anomalies) and converts them into a clean JSON array of strings
+        for downstream generation and evaluation layers.
+
+        Args:
+            state (AgentState): The current graph state containing 'current_prompt'
+                                as well as any global clinical identifiers.
+
+        Returns:
+            dict: A state update dictionary containing 'medical_requirements', a clean
+                  list of parsed raw string criteria extracted from the target text.
+        """
+
+        # ---------------- SYSTEM PROMPT CONFIGURATION ---------------- #
+        # Configures a triple-quoted f-string to inject the current state data.
+        # Explicitly instructs the model to return a raw line-by-line list
+        # without conversational filler or markdown bolding tags.
+        system_prompt = f"""
+            REFERENCE DATA:
+
+            PROMPT TO PARSE:
+            {state['current_prompt']}
+
+            INSTRUCTIONS:
+            Scan the PROMPT TO PARSE to extract specific requirements that the diffusion model must express to
+            generate accurate medical images.
+
+            OUTPUT FORMAT:
+
+            You must use the following format for every item:
+            requirement,
+
+            Provide ONLY the raw text list items matching the format above. Do not include any introductory text,
+            concluding remarks, explanations, or conversational filler.
+        """
+
+        # ---------------- LLM SUMMARIZATION ---------------- #
+        # Invokes the model to extract structural and visual medical features.
+        summary = llm.invoke([HumanMessage(content=system_prompt)])
+
+        # ---------------- CONVERT TO LIST OF STRINGS ---------------- #
+        # Split the string line-by-line using splitlines() to avoid backslash
+        # syntax issues inside enclosing f-strings or complex execution environments.
+        raw_lines = summary.content.splitlines()
+        parsed_list = []
+
+        for line in raw_lines:
+            # Strip markdown artifacts, formatting quotes, and trailing commas.
+            # Casing is left natural to preserve clinical acronyms (e.g., N/C ratio)
+            # since diffusion text encoders (CLIP/T5) are fundamentally case-insensitive.
+            if line:
+                parsed_list.append(line)
+
+        # ---------------- STATE UPDATE ---------------- #
+        # Pass the isolated clinical criteria array back to the state machine.
+        return {
+            "medical_requirements": parsed_list
+        }
+
+
+# ---------------- BIOLOGICAL AUDITOR NODE ---------------- #
 def biological_auditor_node_knowledge(state: AgentState):
     """
     Synthesizes pre-trained biomedical context from internal LLM weights.
@@ -109,7 +177,6 @@ def biological_auditor_node_knowledge(state: AgentState):
 
 
     INSTRUCTIONS:
-
     Summarize the key clinically relevant imaging features from the PubMed results relevant to the query. Extract
     only visually observable and medically relevant descriptors that would help a diffusion model generate clinically
     realistic medical images.
@@ -139,74 +206,6 @@ def biological_auditor_node_knowledge(state: AgentState):
     return {
         "medical_details": parsed_list
     }
-
-
-# # ---------------- BIOLOGICAL AUDITOR NODE (PHASE 2) ---------------- #
-# def biological_auditor_node_pubmed(state: AgentState):
-#     """
-#     Retrieves dynamic biomedical context from live PubMed literature searches.
-#
-#     Purpose:
-#     - Ground the system in verified, peer-reviewed medical literature.
-#     - Enhance accuracy and supplement pre-existing baseline knowledge with specific descriptors.
-#     """
-#
-#     # Extract the current details list from Phase 1 and fallback to an empty array if missing
-#     medical_details = state.get("medical_details", [])
-#
-#     # ---------------- PUBMED QUERY ---------------- #
-#     # Formulate a targeted search string using state variables for disease, anatomy, and imaging modality
-#     query = f"{state['disease']} appearance in {state['anatomy']} {state['image_type']}"
-#
-#     # ---------------- PUBMED SEARCH ---------------- #
-#     # Execute retrieval and sanitize results for LLM processing
-#     search_results = pubmed.invoke(query)
-#     # FIX: Uncommented to define cleaned_results for prompt template execution
-#     cleaned_results = search_results.strip() if isinstance(search_results, str) else ""
-#
-#     # ---------------- SUMMARIZATION PROMPT ---------------- #
-#     # Direct the LLM to filter literature for visually concrete, diffusion-model compatible features
-#     summary_prompt = f"""
-#     REFERENCE DATA:
-#
-#     LITERATURE SEARCH RESULTS FROM PUBMED:
-#     {cleaned_results}
-#
-#     QUERY CONTEXT:
-#     Anatomy: {state['anatomy']}
-#     Disease: {state['disease']}
-#     Image Type: {state['image_type']}
-#
-#
-#     INSTRUCTIONS:
-#
-#     Summarize the key clinically relevant imaging features from LITERATURE SEARCH RESULTS FROM PUBMED relevant to the
-#     query. Extract only visually observable and medically relevant descriptors that would help a diffusion model
-#     generate clinically realistic medical images.
-#
-#
-#     OUTPUT FORMAT:
-#
-#     You must use the following format for every item:
-#     **Term**: characteristic description,
-#
-#     Provide ONLY the raw text list items matching the format above. Do not include any introductory text, concluding
-#     remarks, explanations, or conversational filler.
-#     """
-#
-#     # ---------------- LLM SUMMARIZATION ---------------- #
-#     # Generate structured, bulleted feature list based on PubMed evidence
-#     summary = llm.invoke([HumanMessage(content=summary_prompt)])
-#
-#     # Split raw string by newlines, clean up markdown markers/whitespace, and extract lines
-#     # containing ':' to build a clean list of full terms and definitions for loop iteration.
-#     parsed_list = [line.replace("**", "").strip(" ,[]\t\r") for line in summary.content.split("\n") if ":" in line]
-#
-#     # ---------------- STATE UPDATE ---------------- #
-#     # FIX: Combined current knowledge list (medical_details) with fresh PubMed items (parsed_list)
-#     return {
-#         "medical_details": medical_details + parsed_list
-#     }
 
 
 # ---------------- FILTER NODE ---------------- #
@@ -254,12 +253,9 @@ def filter_node(state: AgentState):
         PROMPT TO SCAN:
         {state.get('current_prompt', '')}
 
-
         INSTRUCTIONS:
-
         Scan the PROMPT TO SCAN to see if the DETAIL TO CHECK keyword or concept is already written, mentioned, or
         explicitly included in the text.
-
 
         OUTPUT FORMAT:
         - If the concept or keyword is written or mentioned, return exactly: PRESENT
@@ -288,302 +284,295 @@ def filter_node(state: AgentState):
     }
 
 
-# ---------------- CLINICAL PRIORITIZATION NODE ---------------- #
-def clinical_prioritization_node(state: AgentState):
+# ---------------- VALIDATION NODE ---------------- #
+def validation_node(state: AgentState):
     """
-    Ranks extracted medical details based on their visual salience for image generation.
+    Performs a granular verification of the current prompt against clinical ground truth.
 
-    This node processes a consolidated array of medical descriptors by executing a
-    deterministic serial evaluation loop. Each feature is contextually scored by an LLM
-    acting as a clinical imaging specialist. Features are tagged based on relevance
-    thresholds and sorted in descending order to guarantee that downstream prompt optimization
-    prioritizes the most pathognomonic and visually critical radiological elements.
+    Iterates through medical requirements and PubMed-derived details to determine
+    their presence in the current prompt. Acts as an independent 'audit' layer
+    to provide the validator node with categorized grounding data.
 
     Args:
-        state (AgentState): The current graph state containing 'medical_details',
-                            'anatomy', 'disease', and 'image_type'.
+        state (AgentState): The current graph state containing:
+            - medical_requirements (list): List of required clinical features.
+            - medical_details (list): List of PubMed-derived diagnostic context.
+            - current_prompt (str): The active prompt to be audited.
+            - current_token_count (float): Current token usage for the prompt.
 
     Returns:
-        dict: A state update dictionary containing 'medical_details', updated to a
-              prioritized list of detail strings tagged with [HIGH RELEVANCE] or
-              [LOW RELEVANCE] and sorted in descending order by score.
+        dict: A dictionary containing categorized audit results and updated scoring:
+            - present_medical_requirements (list): Successfully included requirements.
+            - missing_medical_requirements (list): Unmet clinical requirements.
+            - present_medical_details (list): Successfully included PubMed details.
+            - missing_medical_details (list): Omitted relevant clinical details.
+            - current_score (float): Calculated quality score.
+            - best_prompt (str): The best prompt found so far.
+            - best_token_length (int): Token length of the best prompt.
+            - best_score (float): The highest score achieved so far.
+            - best_valid_prompt (str): The best prompt within token constraints.
+            - best_valid_token_length (int): Token length of the best valid prompt.
+            - best_valid_score (float): The highest score within token constraints.
     """
 
-    # Extract the current details list from state, fallback to an empty array if missing
+    # ---------------- INITIALIZE STATE DATA ---------------- #
+    # Fetch ground truth requirements and PubMed details from the agent state
+    medical_requirements = state.get("medical_requirements", [])
     medical_details = state.get("medical_details", [])
 
-    # Map each medical term to its calculated visual priority score
-    detail_scores = dict()
-
-    # ---------------- SYSTEM PROMPT CONFIGURATION ---------------- #
-    # Configure the structural persona; keep text clean to avoid trailing token padding
-    system_prompt = (
-        "You are a clinical imaging specialist. Your only job is to provide a ranking on how relevant the detail "
-        "is for medical image generation."
-    )
-
-    # Execute a deterministic serial loop in Python to guarantee 100% list coverage
-    for detail in medical_details:
-
-        # ---------------- USER PROMPT CONFIGURATION ---------------- #
-        # Format a highly specific evaluation prompt context for the LLM
-        user_prompt = f"""
-        REFERENCE DATA:
-
-        Anatomy: {state['anatomy']}
-        Disease: {state['disease']}
-        Image Type: {state['image_type']}
-
-        DETAIL TO EVALUATE:
-        "{detail}"
-
-
-        INSTRUCTIONS:
-
-        You are a strict data classifier. Follow these exact steps for every REQUIREMENT TO EVALUATE:
-
-        STEP 1: EVALUATE FINE-GRAINED & LOCAL ATTRIBUTES
-        - If the requirement focuses on micro-environmental details (e.g., individual cell morphology, cellular
-          texture, technical noise, background debris, or isolated staining/imaging artifacts): Classify as [1].
-
-        STEP 2: EVALUATE GLOBAL CLINICAL SIGNIFICANCE
-        - If the requirement does not satisfy STEP 1: Classify as [2]
-
-
-
-        OUTPUT FORMAT:
-
-        Return exactly a single integer: 1 or 2.
-
-        Do not include any conversational text, decimals, letters, punctuation, or markdown code fences.
-        """
-
-
-# If the requirement describes CORE STRUCTURAL ARCHITECTURE (e.g., organ-specific tissue organization, major
-#   anatomical boundaries, overall lesion layout, or defining spatial patterns that characterize the primary
-#   clinical finding):
-#   Classify as [2].
-
-        # Invoke the language model for a single-element scoring pass
-        response = llm.invoke([
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ])
-
-        # Clean up output string text before attempting numeric translation
-        score_str = response.content.strip()
-
-        # Safe int casting to protect against arbitrary LLM string returns
-        try:
-            score_val = float(score_str)
-        except ValueError:
-            score_val = 0  # Safe fallback default value for non-numeric parser failures
-
-        # Append visual categorization metadata based on the numerical cutoff threshold
-        if score_val >= 1:
-            final_detail = f"{detail} [HIGH RELEVANCE]"
-        else:
-            final_detail = f"{detail} [LOW RELEVANCE]"
-
-        # Populate the mapping structure using the clean string as the access key
-        detail_scores[final_detail] = score_val
-
-        # # Iteration Diagnositics
-        # print(f"\n[Evaluating Detail]: {detail}")
-        # print(f" -> Assigned Score : {score_val:.1f}/4")
-        # print(f" -> Tagged Output  : {final_detail}")
-        # print("-" * 50)
-
-    # Sort the dictionary by scores in descending order
-    sorted_detail_scores = dict(sorted(detail_scores.items(), key=lambda item: item[1], reverse=True))
-
-    # Extract just the sorted string keys to overwrite the state's requirement list
-    ranked_medical_details = list(sorted_detail_scores.keys())
-
-    # ---------------- STATE UPDATE ---------------- #
-    # Return the prioritized array back to the graph state
-    return {
-        "medical_details": ranked_medical_details
+    # Group characteristics to enable logical iteration by category
+    characteristics_dict = {
+        "medical_requirements": medical_requirements,
+        "medical_details": medical_details
     }
 
+    # ---------------- TRACKING BUFFERS ---------------- #
+    # Initialize lists to categorize presence/absence for the scoring logic
+    present_medical_requirements = []
+    missing_medical_requirements = []
+    present_medical_details = []
+    missing_medical_details = []
 
-# ---------------- MEDICAL PROMPT OPTIMIZATION NODE ---------------- #
-def medical_prompt_optimization_node(state: AgentState):
-        """
-        Extracts explicit visual and structural clinical requirements from reference data.
-
-        Acts as an Information Extraction Agent that parses dense biomedical literature
-        and baseline user prompts. It isolates diagnostic criteria (e.g., tissue structures,
-        pathological anomalies) and converts them into a clean JSON array of strings
-        for downstream generation and evaluation layers.
-
-        Args:
-            state (AgentState): The current graph state containing 'current_prompt'
-                                as well as any global clinical identifiers.
-
-        Returns:
-            dict: A state update dictionary containing 'medical_requirements', a clean
-                  list of parsed raw string criteria extracted from the target text.
-        """
-
-        # ---------------- SYSTEM PROMPT CONFIGURATION ---------------- #
-        # Configures a triple-quoted f-string to inject the current state data.
-        # Explicitly instructs the model to return a raw line-by-line list
-        # without conversational filler or markdown bolding tags.
-        system_prompt = f"""
-            REFERENCE DATA:
-
-            PROMPT TO PARSE:
-            {state['current_prompt']}
-
-
-            INSTRUCTIONS:
-
-            Scan the PROMPT TO PARSE to extract specific requirements that the diffusion model must express to
-            generate accurate medical images.
-
-
-            OUTPUT FORMAT:
-
-            You must use the following format for every item:
-            requirement,
-
-            Provide ONLY the raw text list items matching the format above. Do not include any introductory text,
-            concluding remarks, explanations, or conversational filler.
-        """
-
-        # ---------------- LLM SUMMARIZATION ---------------- #
-        # Invokes the model to extract structural and visual medical features.
-        summary = llm.invoke([HumanMessage(content=system_prompt)])
-
-        # ---------------- CONVERT TO LIST OF STRINGS ---------------- #
-        # Split the string line-by-line using splitlines() to avoid backslash
-        # syntax issues inside enclosing f-strings or complex execution environments.
-        raw_lines = summary.content.splitlines()
-        parsed_list = []
-
-        for line in raw_lines:
-            # Strip markdown artifacts, formatting quotes, and trailing commas.
-            # Casing is left natural to preserve clinical acronyms (e.g., N/C ratio)
-            # since diffusion text encoders (CLIP/T5) are fundamentally case-insensitive.
-            if line:
-                parsed_list.append(line)
-
-        # ---------------- STATE UPDATE ---------------- #
-        # Pass the isolated clinical criteria array back to the state machine.
-        return {
-            "medical_requirements": parsed_list
-        }
-
-# ---------------- REQUIREMENT PRIORITIZATION NODE ---------------- #
-def requirement_prioritization_node(state: AgentState):
-    """
-    Evaluates and ranks the explicit baseline medical requirements currently present in the state.
-
-    This node executes a deterministic loop over each active prompt requirement, invoking
-    the LLM to score its visual relevance (Tiers 1-4) based on its macro-geometric or micro-textural
-    impact on diffusion model image generation. The final prioritized array overrides the
-    baseline state list for downstream generation and validation.
-
-    Args:
-        state (AgentState): The current graph state containing 'medical_requirements',
-                            'anatomy', 'disease', and 'image_type'.
-
-    Returns:
-        dict: A state update dictionary containing the prioritized list of requirements
-              tagged with [HIGH RELEVANCE] or [LOW RELEVANCE], sorted in descending order.
-    """
-
-    medical_requirements = state.get("medical_requirements", [])
-
-    requirement_scores = dict()
-
-    # ---------------- SYSTEM PROMPT CONFIGURATION ---------------- #
-    # Configure the structural persona; keep text clean to avoid trailing token padding
+    # Defines the persona and objective for the LLM audit call
     system_prompt = (
-        "You are a clinical imaging specialist. Your only job is to provide a ranking on how relevant the requirement "
-        "is for medical image generation."
+        "You are a precise clinical data assistant. Your only job is to check if "
+        "a single medical detail is already explicitly mentioned or described in a prompt."
     )
 
-    # Execute a deterministic serial loop in Python to guarantee 100% list coverage
-    for requirement in medical_requirements:
+    # ---------------- VERIFICATION LOOP ---------------- #
+    # Iterate through each clinical category and evaluate the prompt's adherence
+    for category, characteristics in characteristics_dict.items():
+        for characteristic in characteristics:
 
-        # ---------------- USER PROMPT CONFIGURATION ---------------- #
-        # Format a highly specific evaluation prompt context for the LLM
-        user_prompt = f"""
-        REFERENCE DATA:
+            # Construct the per-item evaluation prompt for the LLM audit
+            user_prompt = f"""
+            REFERENCE DATA:
 
-        Anatomy: {state['anatomy']}
-        Disease: {state['disease']}
-        Image Type: {state['image_type']}
+            CHARACTERISTIC TO CHECK:
+            {characteristic}
 
-        REQUIREMENT TO EVALUATE:
-        "{requirement}"
+            PROMPT TO SCAN:
+            {state.get('current_prompt', '')}
 
+            INSTRUCTIONS:
+            Scan the PROMPT TO SCAN to see if the CHARACTERISTIC TO CHECK keyword or concept
+            is already written, mentioned, or explicitly included in the text.
 
-        INSTRUCTIONS:
+            OUTPUT FORMAT:
+            - If the concept or keyword is written or mentioned, return exactly: PRESENT
+            - If the concept or keyword is completely absent, return exactly: MISSING
 
-        You are a strict data classifier. Follow these exact steps for every REQUIREMENT TO EVALUATE:
+            Do not include any conversational text, JSON structures, or explanations.
+            Just return the single word.
+            """
 
-        STEP 1: Check if the requirement describes any of the following:
-        - Minor details, granular features, fine-grained attributes, background artifacts, dust, coverslip lines,
-          incidental blood cells, or localized staining variations.
-        - If YES: Classify as [1].
+            # Execute the audit call to the LLM and capture the presence status
+            response = llm.invoke([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ])
 
-        STEP 2: If it did not meet the criteria in STEP 1, check if the requirement describes:
-        - Global macro-structural layout or core diagnostic hallmarks (e.g., irregular gland borders, malignant cell
-          clusters).
-        - If YES: Classify as [2].
+            # Normalize the result to ensure consistent boolean string comparison
+            result = response.content.strip().upper()
 
-        CRITICAL: If a requirement contains medical terms but describes localized or incidental components, it must be
-                  classified as [1].
+            # Map the audit result to the corresponding tracking buffer
+            if "PRESENT" in result:
+                if category == "medical_requirements":
+                    present_medical_requirements.append(characteristic)
+                else:
+                    present_medical_details.append(characteristic)
+            else:
+                if category == "medical_requirements":
+                    missing_medical_requirements.append(characteristic)
+                else:
+                    missing_medical_details.append(characteristic)
 
+    # ---------------- COUNTS AND SCORING ---------------- #
+    # Calculate the cardinality of requirements and details for quantitative assessment
+    present_medical_requirements_count = float(len(present_medical_requirements))
+    missing_medical_requirements_count = float(len(missing_medical_requirements))
+    present_medical_details_count = float(len(present_medical_details))
+    missing_medical_details_count = float(len(missing_medical_details))
 
-        OUTPUT FORMAT:
+    # Log the counts for debugging to ensure the math logic is receiving correct inputs
+    print(f"Present Requirements Count: {present_medical_requirements_count}")
+    print(f"Missing Requirements Count: {missing_medical_requirements_count}")
+    print(f"Present Details Count: {present_medical_details_count}")
+    print(f"Missing Details Count: {missing_medical_details_count}")
 
-        Return exactly a single integer: 1 or 2.
+    # ---------------- SCORING CALCULATION ---------------- #
+    # Calculate weighted metrics for requirements, details, and token constraints
+    req_score = (present_medical_requirements_count /
+                 (present_medical_requirements_count + missing_medical_requirements_count)) * 4.0
+    det_score = (present_medical_details_count /
+                 (present_medical_details_count + missing_medical_details_count)) * 3.0
+    token_bonus = 5.0 if state.get('current_token_count', 0.0) <= 77 else 0.0
+    current_score = req_score + det_score + token_bonus
 
-        Do not include any conversational text, decimals, letters, punctuation, or markdown code fences.
-        """
+    print(f"Req Score: {req_score}")
+    print(f"Det Score: {det_score}")
+    print(f"Token Bonus: {token_bonus}")
+    print(f"Current Total Score: {current_score}")
 
-        # Invoke the language model for a single-element scoring pass
-        response = llm.invoke([
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ])
+    # ---------------- STATE PRESERVATION ---------------- #
+    # Compile current audit findings and carry forward historical 'best' records for state persistence
+    updates = {
+        "present_medical_requirements": present_medical_requirements,
+        "missing_medical_requirements": missing_medical_requirements,
+        "present_medical_details": present_medical_details,
+        "missing_medical_details": missing_medical_details,
+        "current_score": current_score,
+        "best_prompt": state.get("best_prompt", ""),
+        "best_token_count": state.get("best_token_count", 0),
+        "best_score": state.get("best_score", 0.0),
+        "best_valid_prompt": state.get("best_valid_prompt", ""),
+        "best_valid_token_count": state.get("best_valid_token_count", 0),
+        "best_valid_score": state.get("best_valid_score", 0.0)
+    }
 
-        # Clean up output string text before attempting numeric translation
-        score_str = response.content.strip()
+    # ---------------- BEST OVERALL PROMPT TRACKING ---------------- #
+    # Update global record if the current iteration achieves a higher total score
+    if current_score > updates["best_score"]:
+        updates["best_prompt"] = state["current_prompt"]
+        updates["best_score"] = current_score
+        updates["best_token_count"] = state["current_token_count"]
 
-        # Handle potential LLM parser deviations safely using floats
-        try:
-            score_val = float(score_str)
-        except ValueError:
-            score_val = 0
-
-        # Segment the clinical specifications into clear high/low binary action bins
-        if score_val > 1:
-            final_requirement = f"{requirement} [HIGH RELEVANCE]"
-        else:
-            final_requirement = f"{requirement} [LOW RELEVANCE]"
-
-        requirement_scores[final_requirement] = score_val
-
-        # Iteration Diagnostics
-        # FIX: Corrected maximum scale boundary display string from '/10.0' to '/4.0' to map to your rubric rules
-        # print(f"\n[Evaluating Requirement]: {requirement}")
-        # print(f" -> Assigned Score : {score_val:.1f}/2.0")
-        # print(f" -> Tagged Output  : {final_requirement}")
-        # print("-" * 50)
-
-    # Sort the dictionary by scores in descending order
-    sorted_requirement_scores = dict(sorted(requirement_scores.items(), key=lambda item: item[1], reverse=True))
-
-    # Extract just the sorted string keys to overwrite the state's requirement list
-    ranked_medical_requirements = list(sorted_requirement_scores.keys())
+    # ---------------- BEST VALID PROMPT TRACKING ---------------- #
+    # Update constraint-satisfied record if the prompt meets token limits and scores higher
+    if state["current_token_count"] <= 77:
+        if current_score > updates["best_valid_score"]:
+            updates["best_valid_prompt"] = state["current_prompt"]
+            updates["best_valid_score"] = current_score
+            updates["best_valid_token_count"] = state["current_token_count"]
 
     # ---------------- STATE UPDATE ---------------- #
-    # Return the prioritized array back to the graph state
+    # Return the aggregated audit results and updated historical markers to the graph
+    return updates
+
+
+# ---------------- VALIDATION NODE ---------------- #
+def generator_node(state: AgentState):
+    """
+    Executes a conditional prompt revision loop based on token constraints.
+
+    This function analyzes the current prompt's list structure against a hard
+    token limit (77). Depending on whether the count exceeds the limit, it
+    instructs the LLM to either prune a semantically similar characteristic
+    or integrate a new one, ensuring that the resulting comma-separated list
+    maintains syntactic integrity.
+
+    Args:
+        state: The current agent state containing the prompt, token metrics,
+               and lists of medical requirements/details.
+
+    Returns:
+        dict: An updated state containing the revised prompt, new token count,
+              and incremented iteration counter.
+    """
+
+    # ---------------- INITIALIZE STATE DATA ---------------- #
+    # Retrieve current progress from the agent state to compute the performance metrics.
+    present_medical_requirements = state.get("present_medical_requirements", [])
+    missing_medical_requirements = state.get("missing_medical_requirements", [])
+    present_medical_details = state.get("present_medical_details", [])
+    missing_medical_details = state.get("missing_medical_details", [])
+
+    # ---------------- SELECT CHARACTERISTIC TO ADD ---------------- #
+    # Prioritize missing requirements over details to ensure baseline
+    # clinical criteria are met before refining specific diagnostic details.
+    characteristic_to_add = None
+
+    if missing_medical_requirements:
+        # If requirements are missing, select the first requirement to address.
+        characteristic_to_add = missing_medical_requirements[0]
+    elif missing_medical_details:
+        # If all requirements are met but specific details are still missing,
+        # select the first detail to enrich the prompt.
+        characteristic_to_add = missing_medical_details[0]
+
+    # ---------------- SELECT CHARACTERISTIC TO REMOVE ---------------- #
+    # If the token limit is exceeded, identify a low-priority characteristic
+    # currently in the prompt to remove, starting with clinical details
+    # before sacrificing core medical requirements.
+    characteristic_to_remove = None
+
+    if present_medical_details:
+        # If details are present, remove the first one to reduce token usage
+        # while preserving essential clinical requirements.
+        characteristic_to_remove = present_medical_details[0]
+
+    elif present_medical_requirements:
+        # If no optional details are present, begin removing core requirements
+        # to ensure the prompt stays within the hard token limit.
+        characteristic_to_remove = present_medical_requirements[0]
+
+    # ---------------- SYSTEM ROLE DEFINITION ---------------- #
+    # Define the agent's persona and objective as a specialist
+    # focusing on descriptive accuracy within strict token constraints.
+    system_prompt = (
+        "You are an expert clinical imaging specialist. Your objective is to "
+        "refine and revise prompts to be highly descriptive and accurate, "
+        "while strictly adhering to the specified token limit."
+    )
+
+    # ---------------- USER ROLE DEFINITION ---------------- #
+    # Provide the revision agent with the list state and edit instructions.
+    # The agent's focus is on maintaining valid list syntax (commas/conjunctions)
+    # when adding or removing elements to meet the 77-token constraint.
+    user_prompt = f"""
+    REFERENCE DATA:
+
+    PROMPT TO REVISE:
+    {state.get('best_prompt', '')}
+
+    CHARACTERISTIC TO ADD:
+    {characteristic_to_add}
+
+    CHARACTERISTIC TO REMOVE:
+    {characteristic_to_remove}
+
+    TOKEN LENGTH:
+    {state['best_token_count']}
+
+    TOKEN LIMIT:
+    77
+
+    INSTRUCTIONS:
+    - IF TOKEN LENGTH: > TOKEN LIMIT:
+        1) Locate the item in the list semantically similar to '{characteristic_to_remove}'.
+        2) Remove it.
+        3) Reformat the list: ensure there are no trailing commas, double commas, or orphaned conjunctions (like an
+          'and' left without a partner).
+
+    - IF TOKEN LENGTH <= TOKEN LIMIT:
+        1) Insert a reworded version of '{characteristic_to_add}' into the list, ensuring it matches the tone of the
+           existing items.
+        2) Ensure it is preceded by a comma if necessary.
+        3) Ensure the final list has proper comma placement and no duplicate conjunctions.
+
+    OUTPUT FORMAT:
+    Return ONLY the final revised prompt.
+    Do not include explanations, labels, units, or any additional text.
+    """
+
+    # Invoke the language model to perform the structured quality assessment
+    response = llm.invoke([
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ])
+
+    # Clean the response
+    current_prompt = response.content.strip()
+
+    # Calculate the token length using the CLIP tokenizer
+    current_token_count = len(tokenizer.encode(current_prompt))
+
+    # Increment the iteration counter to track progress through the revision loop
+    iterations = state.get("iterations") + 1
+
+    # ---------------- RETURN STATE UPDATE ---------------- #
     return {
-        "medical_requirements": ranked_medical_requirements
+        "current_prompt": current_prompt,
+        "current_token_count": current_token_count,
+        "Iterations": iterations
     }
