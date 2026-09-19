@@ -271,7 +271,7 @@ def define_val_test_transformer():
     return transform
 
 
-def sampler(dataset, count, size=100):
+def sampler(dataset):
     """
     Build a ``WeightedRandomSampler`` that balances class representation per epoch.
 
@@ -282,11 +282,6 @@ def sampler(dataset, count, size=100):
     Args:
         dataset (torch.utils.data.Dataset): Dataset with a ``targets`` attribute
             containing integer class labels for every sample.
-        count (int): Number of samples in the dataset (typically ``len(dataset)``).
-            Currently unused in the body but kept for API consistency.
-        size (int): Number of samples drawn per epoch. Defaults to 1000.
-            Currently unused directly; ``len(dataset)`` is passed to the sampler
-            instead, preserving the original behaviour.
 
     Returns:
         torch.utils.data.sampler.WeightedRandomSampler: Class-balanced sampler.
@@ -315,108 +310,116 @@ def sampler(dataset, count, size=100):
     return weighted_sampler
 
 
-def split_data_per_type(image_patches, total_image_count, patch_type, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=16):
+def split_data_per_type(image_patches, batch_size=16):
     """
-    Partition image patch directories into train / val / test splits and return DataLoaders.
+    Split image patches into stratified training, validation, and test sets
+    based on cancer status, then create corresponding PyTorch DataLoaders.
 
-    The split is performed at the *directory* (patch-group) level rather than
-    at the individual file level, so all patches from the same tissue region
-    stay together in a single split. Directories are shuffled before allocation
-    to reduce ordering bias.
-
-    Steps:
-        1. Create clean on-disk directory trees for each split.
-        2. Shuffle patch-group directories and allocate them to splits so that
-           the cumulative file counts approximate the requested ratios.
-        3. Copy allocated directories into the appropriate split folders.
-        4. Apply augmentation transforms to training data; plain transforms to
-           validation and test data.
-        5. Wrap each split in a ``DataLoader``; training uses a
-           ``WeightedRandomSampler`` to handle class imbalance.
+    Cancerous and non-cancerous patch groups are shuffled independently and
+    divided across the three splits while maintaining their class proportions.
+    Training uses a weighted sampler to balance class representation, while
+    validation and test sets are loaded without sampling or augmentation.
 
     Args:
-        image_patches (dict): Mapping of patch-group directory path → list of
-            image file paths, as returned by ``get_patch_files``.
-        total_image_count (int): Total number of image files across all groups.
-        train_ratio (float): Fraction of images to allocate to training. Default 0.50.
-        val_ratio (float): Fraction of images to allocate to validation. Default 0.30.
-        test_ratio (float): Fraction of images to allocate to testing. Default 0.20.
-        batch_size (int): Samples per mini-batch for all DataLoaders. Default 8.
+        image_patches (dict):
+            Dictionary mapping patch group identifiers to their corresponding
+            image patch data.
+        batch_size (int, optional):
+            Number of images loaded per batch. Defaults to 16.
 
     Returns:
-        tuple[DataLoader, DataLoader, DataLoader]:
-            train_loader, val_loader, test_loader
+        tuple:
+            A tuple containing the training, validation, and test DataLoaders.
     """
 
-    # Create clean on-disk directory trees for each split
+    # Create directories for the full dataset and train/validation/test splits
     data_dir, train_dir, val_dir, test_dir = create_data_directories()
 
-    # Shuffle patch-group directories to randomise the split allocation
-    image_keys = list(image_patches.keys())
-    random.shuffle(image_keys)
+    # Separate patch groups into cancerous and non-cancerous categories
+    cancer = {}
+    no_cancer = {}
 
-    # Reconstruct the dict in shuffled order for deterministic iteration
-    sorted_image_patches = {key: image_patches[key] for key in image_keys}
+    # Separate image patch groups into cancerous and non-cancerous categories
+    for key, value in image_patches.items():
 
-    # Target image counts for each split based on the requested ratios
-    train_count = round(train_ratio * total_image_count)
-    val_count = round(val_ratio * total_image_count)
-    test_count = round(test_ratio * total_image_count)
+        # Identify cancerous groups while excluding keys containing "NotCancerous"
+        is_cancer = "Cancerous" in key and "NotCancerous" not in key
 
-    # Accumulators for directories assigned to each split
-    train_dirs, val_dirs, test_dirs = [], [], []
+        # Identify non-cancerous groups
+        is_no_cancer = "NotCancerous" in key
 
-    # Running image-count totals used to decide which split a directory goes to
-    cur_train_count = 0
-    cur_val_count = 0
-    cur_test_count = 0
+        # Add each patch group to its corresponding class
+        if is_cancer:
+            cancer[key] = value
+        elif is_no_cancer:
+            no_cancer[key] = value
 
-    # Greedily assign each patch group to the split that still has capacity
-    for image_path, image_files in sorted_image_patches.items():
-        count = len(image_files)
-        if (cur_train_count + count) < train_count:
-            cur_train_count += count
-            train_dirs.append(image_path)
-        elif (cur_val_count + count) < val_count:
-            cur_val_count += count
-            val_dirs.append(image_path)
-        else:
-            # All remaining directories go to the test split
-            cur_test_count += count
-            test_dirs.append(image_path)
+    # Extract patch group identifiers for each class
+    cancer_keys = list(cancer.keys())
+    no_cancer_keys = list(no_cancer.keys())
 
-    print("Current counts -> Train: {}, Validation: {}, Test: {}".format(cur_train_count, cur_val_count, cur_test_count))
+    # Randomize the order of patch groups before splitting
+    random.shuffle(cancer_keys)
+    random.shuffle(no_cancer_keys)
 
-    # Copy each split's patch groups into the corresponding on-disk directories
+    # Split each class while maintaining the desired class proportions
+    train_dirs = cancer_keys[:11] + no_cancer_keys[:7]
+    val_dirs = cancer_keys[11:16] + no_cancer_keys[7:10]
+    test_dirs = cancer_keys[16:] + no_cancer_keys[10:]
+
+    # Shuffle the groups within each split
+    random.shuffle(train_dirs)
+    random.shuffle(val_dirs)
+    random.shuffle(test_dirs)
+
+    # Copy each split's patch groups into the corresponding directories
     copy_directories_to_directories(train_dir, train_dirs)
     copy_directories_to_directories(val_dir, val_dirs)
     copy_directories_to_directories(test_dir, test_dirs)
 
-    # Training transform includes data augmentation; val/test transforms do not
+    # Apply data augmentation only to the training set
     train_transform = define_train_transformer()
     val_transform = define_val_test_transformer()
     test_transform = define_val_test_transformer()
 
-    # Build ImageFolder datasets from the populated on-disk split directories
+    # Build ImageFolder datasets from the populated split directories
     train_dataset = datasets.ImageFolder(train_dir, transform=train_transform)
     val_dataset = datasets.ImageFolder(val_dir, transform=val_transform)
     test_dataset = datasets.ImageFolder(test_dir, transform=test_transform)
 
-    # Weighted sampler ensures balanced class representation during training
-    weighted_sampler = sampler(train_dataset, cur_train_count)
+    # Use a weighted sampler to balance class representation during training
+    weighted_sampler = sampler(train_dataset)
 
-    # Training DataLoader uses the weighted sampler; val/test use default sequential order
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler,
-                              num_workers=4, pin_memory=True, persistent_workers=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size,
-                            num_workers=4, pin_memory=True, persistent_workers=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size,
-                             num_workers=4, pin_memory=True, persistent_workers=True)
+    # Create DataLoaders; pinned memory improves CPU-to-GPU data transfers
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        sampler=weighted_sampler,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
 
     return train_loader, val_loader, test_loader
 
 
-def split_data_combined(image_patches, total_image_count, batch_size=16):
+def split_data_combined(image_patches, batch_size=16):
     """
     Partition image patch directories into train / val / test splits and return DataLoaders.
 
@@ -567,15 +570,33 @@ def split_data_combined(image_patches, total_image_count, batch_size=16):
     test_dataset = datasets.ImageFolder(test_dir, transform=test_transform)
 
     # Weighted sampler ensures balanced class representation during training
-    weighted_sampler = sampler(train_dataset, len(train_dataset))
+    weighted_sampler = sampler(train_dataset)
 
-    # Training DataLoader uses the weighted sampler; val/test use default sequential order
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler,
-                              num_workers=4, pin_memory=True, persistent_workers=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=4, pin_memory=True,
-                            persistent_workers=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=4, pin_memory=True,
-                             persistent_workers=True)
+    # Create DataLoaders; pinned memory improves CPU-to-GPU data transfers
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        sampler=weighted_sampler,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
 
     return train_loader, val_loader, test_loader
 
@@ -1462,12 +1483,15 @@ def main():
             total_image_count
         )
 
-    # Split all image patches (tumor, Voronoi, synthetic) into combined train/val/test DataLoaders
-    train_loader, val_loader, test_loader = split_data_combined(image_patches, total_image_count)
 
-    # ── Data splitting and DataLoader creation ────────────────────────────────
-    # train_loader, val_loader, test_loader = splitting_data(image_patches, total_image_count, args.type)
-    #
+    # Split all image patch types into combined train/validation/test DataLoaders
+    if args.type == "combined":
+        train_loader, val_loader, test_loader = split_data_combined(image_patches)
+
+    # Split image patches by individual image type into train/validation/test DataLoaders
+    else:
+        train_loader, val_loader, test_loader = split_data_per_type(image_patches)
+
     # ── Model instantiation ───────────────────────────────────────────────────
     device, model = load_model(args.type)
 
@@ -1596,21 +1620,43 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Training
-# Training: 84 synthetic cancer + 52 synthetic no cancer + 44 tumor cancer + 28 tumor no cancer + 44 voronoi cancer + 28 voronoi no cancer = 280 images
+# ============================================================
+# Single Image Type
+# ============================================================
+#
+# Total: 84 cancerous + 52 non-cancerous = 136 images
+#
+# Training:   44 cancerous + 28 non-cancerous = 72 images
+# Validation: 20 cancerous + 12 non-cancerous = 32 images
+# Testing:    20 cancerous + 12 non-cancerous = 32 images
 
-# Validation
-# Validation: 20 tumor cancer +  12 tumor no cancer + 20 voronoi cancer +  12 voronoi no cancer = 64 images
 
-# Testing
-# Testing: 20 tumor cancer +  12 tumor no cancer + 20 voronoi cancer + 12  voronoi no cancer = 64 images
-
-# Split percentages
-# Training: 280/408 -> 68.62%
-# Validation: 64/408 -> 15.68%
-# Testing: 64/408 -> 15.68%
-
-# Class distribution
-# Training: Cancer -> 61.42%, No Cancer -> 38.57%
-# Validation: Cancer -> 62.5%, No Cancer -> 37.5%
-# Testing: Cancer -> 62.5%, No Cancer -> 37.5%
+# ============================================================
+# Multiple Image Types
+# ============================================================
+#
+# Training:
+#   84 synthetic cancer + 52 synthetic no cancer
+#   44 tumor cancer + 28 tumor no cancer
+#   44 Voronoi cancer + 28 Voronoi no cancer
+#   Total: 280 images
+#
+# Validation:
+#   20 tumor cancer + 12 tumor no cancer
+#   20 Voronoi cancer + 12 Voronoi no cancer
+#   Total: 64 images
+#
+# Testing:
+#   20 tumor cancer + 12 tumor no cancer
+#   20 Voronoi cancer + 12 Voronoi no cancer
+#   Total: 64 images
+#
+# Split Percentages:
+# Training:   280/408 = 68.63%
+# Validation:  64/408 = 15.69%
+# Testing:     64/408 = 15.69%
+#
+# Class Distribution:
+# Training:   172 cancer (61.43%) + 108 no cancer (38.57%)
+# Validation: 40 cancer (62.50%) + 24 no cancer (37.50%)
+# Testing:    40 cancer (62.50%) + 24 no cancer (37.50%)
