@@ -136,6 +136,7 @@ def create_data_directories():
     if os.path.exists('/.dockerenv'):
         data_dir = '/data'  # Docker environment base directory
     else:
+        # data_dir = "/Users/arpitha/Documents/Research_Labs/Lab_Schwartz/Lung-Cancer-Image-Classification-main/data"
         data_dir = '/ocean/projects/bio240001p/arpitha/data'  # Local environment
 
     # Delete existing base directory if it exists to start fresh
@@ -199,6 +200,7 @@ def copy_directories_to_directories(dst_dir, dirs):
 
     # Iterate over source directories
     for dir in dirs:
+
         source_dir = Path(dir)
 
         # Route to the correct class subfolder based on the directory name
@@ -313,7 +315,7 @@ def sampler(dataset, count, size=100):
     return weighted_sampler
 
 
-def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=16):
+def split_data_per_type(image_patches, total_image_count, patch_type, train_ratio=0.50, val_ratio=0.30, test_ratio=0.20, batch_size=16):
     """
     Partition image patch directories into train / val / test splits and return DataLoaders.
 
@@ -410,6 +412,170 @@ def splitting_data(image_patches, total_image_count, train_ratio=0.50, val_ratio
                             num_workers=4, pin_memory=True, persistent_workers=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size,
                              num_workers=4, pin_memory=True, persistent_workers=True)
+
+    return train_loader, val_loader, test_loader
+
+
+def split_data_combined(image_patches, total_image_count, batch_size=16):
+    """
+    Partition image patch directories into train / val / test splits and return DataLoaders.
+
+    The split is performed at the *directory* (patch-group) level rather than
+    at the individual file level, so all patches from the same tissue region
+    stay together in a single split. Patch groups are separated by dataset
+    type (tumor, Voronoi, synthetic) and cancer status, shuffled, and then
+    allocated to splits with a fixed count per group so that tumor and
+    Voronoi patches from the same region stay aligned across splits.
+    Synthetic patches are included only in the training set.
+
+    Steps:
+        1. Create clean on-disk directory trees for each split.
+        2. Separate patch-group keys by dataset type (tumor / Voronoi /
+           synthetic) and cancer status (Cancerous / NotCancerous).
+        3. Shuffle tumor patch-group keys and derive the matching Voronoi
+           keys for the same tissue regions.
+        4. Allocate a fixed number of groups per class to train / val / test,
+           then shuffle each split so groups aren't ordered by type.
+        5. Copy allocated directories into the appropriate split folders.
+        6. Apply augmentation transforms to training data; plain transforms to
+           validation and test data.
+        7. Wrap each split in a ``DataLoader``.
+
+    Args:
+        image_patches (dict): Mapping of patch-group directory path → list of
+            image file paths, as returned by ``get_patch_files``.
+        total_image_count (int): Total number of image files across all groups.
+        batch_size (int): Samples per mini-batch for all DataLoaders. Default 16.
+
+    Returns:
+        tuple[DataLoader, DataLoader, DataLoader]:
+            train_loader, val_loader, test_loader
+    """
+
+    # Create clean on-disk directory trees for each split
+    data_dir, train_dir, val_dir, test_dir = create_data_directories()
+
+    # Dictionaries to store image patches by dataset type and cancer status
+    tumor_cancer = {}
+    tumor_no_cancer = {}
+
+    voronoi_cancer = {}
+    voronoi_no_cancer = {}
+
+    synthetic_cancer = {}
+    synthetic_no_cancer = {}
+
+    # Loop through all image patches and their associated values
+    for key, value in image_patches.items():
+
+        # Identify whether the patch belongs to the cancerous or non-cancerous class
+        is_cancer = "Cancerous" in key and "NotCancerous" not in key
+        is_no_cancer = "NotCancerous" in key
+
+        # Separate tumor dataset patches by cancer status
+        if "tumor" in key.lower():
+            if is_cancer:
+                tumor_cancer[key] = value
+            elif is_no_cancer:
+                tumor_no_cancer[key] = value
+
+        # Separate Voronoi dataset patches by cancer status
+        elif "voronoi" in key.lower():
+            if is_cancer:
+                voronoi_cancer[key] = value
+            elif is_no_cancer:
+                voronoi_no_cancer[key] = value
+
+        # Separate synthetic dataset patches by cancer status
+        # "context" in the path identifies the synthetic dataset
+        elif "context" in key.lower():
+            if is_cancer:
+                synthetic_cancer[key] = value
+            elif is_no_cancer:
+                synthetic_no_cancer[key] = value
+
+    # Initialize empty lists for training, validation, and test directories
+    train_dirs, val_dirs, test_dirs = [], [], []
+
+    # Get the folder paths for cancerous and non-cancerous tumor images
+    tumor_cancer_keys = list(tumor_cancer.keys())
+    tumor_no_cancer_keys = list(tumor_no_cancer.keys())
+
+    # Shuffle tumor folders to randomly assign them to train/validation/test sets
+    random.shuffle(tumor_cancer_keys)
+    random.shuffle(tumor_no_cancer_keys)
+
+    # Build the corresponding Voronoi folder paths for cancerous tumor images
+    voronoi_cancer_keys = []
+
+    for tumor_key in tumor_cancer_keys:
+        folder_name = os.path.basename(tumor_key)
+        # base_voronoi_path = "/Users/arpitha/Documents/Research_Labs/Lab_Schwartz/Lung-Cancer-Image-Classification-main/voronoi_patches/Cancerous/"
+        base_voronoi_path = "/ocean/projects/bio240001p/arpitha/Voronoi_patches/Cancerous"
+        voronoi_key = base_voronoi_path + folder_name + "_voronoi_diagram"
+
+        # Only include the Voronoi folder if it exists in the dataset
+        if voronoi_key in voronoi_cancer:
+            voronoi_cancer_keys.append(voronoi_key)
+
+    # Build the corresponding Voronoi folder paths for non-cancerous tumor images
+    voronoi_no_cancer_keys = []
+
+    for tumor_key in tumor_no_cancer_keys:
+        folder_name = os.path.basename(tumor_key)
+        # base_voronoi_path = "/Users/arpitha/Documents/Research_Labs/Lab_Schwartz/Lung-Cancer-Image-Classification-main/voronoi_patches/NotCancerous/"
+        base_voronoi_path = "/ocean/projects/bio240001p/arpitha/Voronoi_patches/NotCancerous"
+        voronoi_key = base_voronoi_path + folder_name + "_voronoi_diagram"
+
+        # Only include the Voronoi folder if it exists in the dataset
+        if voronoi_key in voronoi_no_cancer:
+            voronoi_no_cancer_keys.append(voronoi_key)
+
+    # Get the folder paths for synthetic cancerous and non-cancerous images
+    synthetic_cancer_keys = list(synthetic_cancer.keys())
+    synthetic_no_cancer_keys = list(synthetic_no_cancer.keys())
+
+    # Split the tumor and Voronoi folders into training, validation, and test sets
+    # Synthetic images are included only in the training set
+    train_dirs = tumor_cancer_keys[:11] + tumor_no_cancer_keys[:7] + voronoi_cancer_keys[:11] + \
+                 voronoi_no_cancer_keys[:7] + synthetic_cancer_keys + synthetic_no_cancer_keys
+
+    val_dirs = tumor_cancer_keys[11:16] + tumor_no_cancer_keys[7:10] + \
+               voronoi_cancer_keys[11:16] + voronoi_no_cancer_keys[7:10]
+
+    test_dirs = tumor_cancer_keys[16:] + tumor_no_cancer_keys[10:] + \
+                voronoi_cancer_keys[16:] + voronoi_no_cancer_keys[10:]
+
+    # Shuffle each split so items aren't grouped by patch type
+    random.shuffle(train_dirs)
+    random.shuffle(val_dirs)
+    random.shuffle(test_dirs)
+
+    # Copy each split's patch groups into the corresponding on-disk directories
+    copy_directories_to_directories(train_dir, train_dirs)
+    copy_directories_to_directories(val_dir, val_dirs)
+    copy_directories_to_directories(test_dir, test_dirs)
+
+    # Training transform includes data augmentation; val/test transforms do not
+    train_transform = define_train_transformer()
+    val_transform = define_val_test_transformer()
+    test_transform = define_val_test_transformer()
+
+    # Build ImageFolder datasets from the populated on-disk split directories
+    train_dataset = datasets.ImageFolder(train_dir, transform=train_transform)
+    val_dataset = datasets.ImageFolder(val_dir, transform=val_transform)
+    test_dataset = datasets.ImageFolder(test_dir, transform=test_transform)
+
+    # Weighted sampler ensures balanced class representation during training
+    weighted_sampler = sampler(train_dataset, len(train_dataset))
+
+    # Training DataLoader uses the weighted sampler; val/test use default sequential order
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=weighted_sampler,
+                              num_workers=4, pin_memory=True, persistent_workers=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=4, pin_memory=True,
+                            persistent_workers=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=4, pin_memory=True,
+                             persistent_workers=True)
 
     return train_loader, val_loader, test_loader
 
@@ -580,7 +746,7 @@ def get_activation(name, activation):
     return hook
 
 
-def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.70, factor=0.5, patience=3):
+def get_params(model, learningRate=5e-5, weight_decay=5e-5, momentum=0.70, factor=0.5, patience=3):
     """
     Configure and return the loss function, optimiser, and learning-rate scheduler.
 
@@ -614,7 +780,7 @@ def get_params(model, learningRate=1e-4, weight_decay=1e-4, momentum=0.70, facto
 
 
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=50, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=20, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[],
           all_train_f1 = [], all_val_f1 = []):
     """
@@ -975,6 +1141,8 @@ def plotAccuracy(mode, accuracies):
     plt.title(plot_title)
     plt.legend()
     plt.grid(True)
+    plt.axis(xmin=0, ymin=0)
+    plt.ylim(0, 1)
     plt.savefig(save_path)
 
 
@@ -1007,6 +1175,8 @@ def plotF1Score(mode, f1_scores):
     plt.title(plot_title)
     plt.legend()
     plt.grid(True)
+    plt.axis(xmin=0, ymin=0)
+    plt.ylim(0, 1)
     plt.savefig(save_path)
 
 
@@ -1039,6 +1209,8 @@ def plotLoss(mode, losses):
     plt.title(plot_title)
     plt.legend()
     plt.grid(True)
+    plt.axis(xmin=0, ymin=0)
+    plt.ylim(0, 1)
     plt.savefig(save_path)
 
 
@@ -1161,58 +1333,141 @@ def main():
     """
 
     # Set a random seed for full reproducibility
-    # seed = 42
-    # random.seed(seed)
-    # np.random.seed(seed)
-    # torch.manual_seed(seed)
-    # torch.cuda.manual_seed_all(seed)
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # Record start time to measure total end-to-end runtime
     start_time = time.time()
 
     # ── CLI argument parsing ───────────────────────────────────────────────────
     parser = argparse.ArgumentParser(description="Segmentation input type")
-    parser.add_argument('--type', type=str, choices=["tumor", "voronoi", "synthetic"], required=True)
+    parser.add_argument('--type', type=str, choices=["tumor", "voronoi", "synthetic", "combined"], required=True)
     args = parser.parse_args()
 
     # ── Resolve patch directory paths ─────────────────────────────────────────
+    # Determine the location of the image patch directories depending on whether
+    # the code is running inside Docker or directly on the HPC filesystem.
+    # The variables are stored as lists because the "combined" experiment can use
+    # multiple image sources simultaneously (real + Voronoi + synthetic).
     if os.path.exists('/.dockerenv'):
         # Paths inside a Docker container
+
         if args.type == "tumor":
-            cancer_patches_dir    = '/tumor_patches/Cancerous'
-            no_cancer_patches_dir = '/tumor_patches/NotCancerous'
+            # Use only real histopathology images
+            cancer_patches_dirs = ['/tumor_patches/Cancerous']
+            no_cancer_patches_dirs = ['/tumor_patches/NotCancerous']
+
         elif args.type == "voronoi":
-            cancer_patches_dir    = '/voronoi_patches/Cancerous'
-            no_cancer_patches_dir = '/voronoi_patches/NotCancerous'
+            # Use only Voronoi-transformed images
+            cancer_patches_dirs = ['/voronoi_patches/Cancerous']
+            no_cancer_patches_dirs = ['/voronoi_patches/NotCancerous']
+
         elif args.type == "synthetic":
-            cancer_patches_dir    = '/context_patches/Cancerous'
-            no_cancer_patches_dir = '/context_patches/NotCancerous'
+            # Use only synthetic generated images
+            cancer_patches_dirs = ['/context_patches/Cancerous']
+            no_cancer_patches_dirs = ['/context_patches/NotCancerous']
+
+        elif args.type == "combined":
+            # Use all three image sources:
+            # real histopathology + Voronoi images + synthetic images
+            cancer_patches_dirs = [
+                '/tumor_patches/Cancerous',
+                '/voronoi_patches/Cancerous',
+                '/context_patches/Cancerous'
+            ]
+
+            no_cancer_patches_dirs = [
+                '/tumor_patches/NotCancerous',
+                '/voronoi_patches/NotCancerous',
+                '/context_patches/NotCancerous'
+            ]
+
     else:
         # Paths on the local HPC filesystem
+
+        # Base directory containing all image patch folders
+        # base_path = "/Users/arpitha/Documents/Research_Labs/Lab_Schwartz/Lung-Cancer-Image-Classification-main"
         base_path = '/ocean/projects/bio240001p/arpitha'
+
         if args.type == "tumor":
-            cancer_patches_dir    = f'{base_path}/tumor_patches/Cancerous'
-            no_cancer_patches_dir = f'{base_path}/tumor_patches/NotCancerous'
+            # Use only real histopathology images
+            cancer_patches_dirs = [
+                f'{base_path}/tumor_patches/Cancerous'
+            ]
+            no_cancer_patches_dirs = [
+                f'{base_path}/tumor_patches/NotCancerous'
+            ]
+
         elif args.type == "voronoi":
-            cancer_patches_dir    = f'{base_path}/voronoi_patches/Cancerous'
-            no_cancer_patches_dir = f'{base_path}/voronoi_patches/NotCancerous'
+            # Use only Voronoi-transformed images
+            cancer_patches_dirs = [
+                f'{base_path}/voronoi_patches/Cancerous'
+            ]
+            no_cancer_patches_dirs = [
+                f'{base_path}/voronoi_patches/NotCancerous'
+            ]
+
         elif args.type == "synthetic":
-            cancer_patches_dir    = f'{base_path}/context_patches/Cancerous'
-            no_cancer_patches_dir = f'{base_path}/context_patches/NotCancerous'
+            # Use only synthetic generated images
+            cancer_patches_dirs = [
+                f'{base_path}/context_patches/Cancerous'
+            ]
+            no_cancer_patches_dirs = [
+                f'{base_path}/context_patches/NotCancerous'
+            ]
+
+        elif args.type == "combined":
+            # Use all three image sources:
+            # real histopathology + Voronoi images + synthetic images
+            cancer_patches_dirs = [
+                f'{base_path}/tumor_patches/Cancerous',
+                f'{base_path}/voronoi_patches/Cancerous',
+                f'{base_path}/context_patches/Cancerous'
+            ]
+
+            no_cancer_patches_dirs = [
+                f'{base_path}/tumor_patches/NotCancerous',
+                f'{base_path}/voronoi_patches/NotCancerous',
+                f'{base_path}/context_patches/NotCancerous'
+            ]
 
     # ── Collect image patch metadata ──────────────────────────────────────────
+
+    # Initialize a dictionary to store image patch directories and their associated
+    # image file paths. Each key corresponds to a patch group directory, and each
+    # value contains the list of image files found within that directory.
     image_patches = {}
+
+    # Track the total number of image patches collected across all image sources
+    # (tumor, voronoi, synthetic, or combined) and both classes.
     total_image_count = 0
 
-    # Load file paths from both class directories and accumulate the running count
-    image_patches, total_image_count = get_patch_files(cancer_patches_dir, image_patches, total_image_count)
-    image_patches, total_image_count = get_patch_files(no_cancer_patches_dir, image_patches, total_image_count)
+    # Combine all cancerous and non-cancerous patch directories into a single list.
+    # This allows the same collection logic to be applied regardless of whether
+    # the experiment uses one image source or multiple combined sources.
+    all_patch_dirs = cancer_patches_dirs + no_cancer_patches_dirs
+
+    # Iterate through every patch directory and collect image file metadata.
+    # The directory names preserve the class information ("Cancerous" or
+    # "NotCancerous"), which is used later during dataset organization.
+    for patch_dir in all_patch_dirs:
+        image_patches, total_image_count = get_patch_files(
+            patch_dir,
+            image_patches,
+            total_image_count
+        )
+
+    # Split all image patches (tumor, Voronoi, synthetic) into combined train/val/test DataLoaders
+    train_loader, val_loader, test_loader = split_data_combined(image_patches, total_image_count)
 
     # ── Data splitting and DataLoader creation ────────────────────────────────
-    train_loader, val_loader, test_loader = splitting_data(image_patches, total_image_count)
-
+    # train_loader, val_loader, test_loader = splitting_data(image_patches, total_image_count, args.type)
+    #
     # ── Model instantiation ───────────────────────────────────────────────────
     device, model = load_model(args.type)
 
@@ -1235,7 +1490,7 @@ def main():
         model.module.features[8].register_forward_hook(hook_function)
     else:
         model.features[8].register_forward_hook(hook_function)
-
+    #
     # ── Optimiser and scheduler setup ─────────────────────────────────────────
     criterion, optimizer, scheduler = get_params(model)
 
@@ -1340,3 +1595,22 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Training
+# Training: 84 synthetic cancer + 52 synthetic no cancer + 44 tumor cancer + 28 tumor no cancer + 44 voronoi cancer + 28 voronoi no cancer = 280 images
+
+# Validation
+# Validation: 20 tumor cancer +  12 tumor no cancer + 20 voronoi cancer +  12 voronoi no cancer = 64 images
+
+# Testing
+# Testing: 20 tumor cancer +  12 tumor no cancer + 20 voronoi cancer + 12  voronoi no cancer = 64 images
+
+# Split percentages
+# Training: 280/408 -> 68.62%
+# Validation: 64/408 -> 15.68%
+# Testing: 64/408 -> 15.68%
+
+# Class distribution
+# Training: Cancer -> 61.42%, No Cancer -> 38.57%
+# Validation: Cancer -> 62.5%, No Cancer -> 37.5%
+# Testing: Cancer -> 62.5%, No Cancer -> 37.5%
