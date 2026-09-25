@@ -683,6 +683,8 @@ class ModelEmbedding(nn.Module):
             # Classify from the embedding output (embedding layer is part of the path)
             out = self.finlinear(embedding_out)
 
+        # out = self.finlinear(embedding_out)
+
         # Return both the embedding vector and the classification logits
         return embedding_out, out
 
