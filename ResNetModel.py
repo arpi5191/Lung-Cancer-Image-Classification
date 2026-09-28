@@ -676,14 +676,14 @@ class ModelEmbedding(nn.Module):
         # Compute the embedding vector via a linear transform followed by ReLU
         embedding_out = self.relu(self.linear(embedding))
 
-        if self.data_type in ["tumor", "synthetic"]:
-            # Classify directly from the raw flattened features (no embedding layer in path)
-            out = self.finlinear(embedding)
-        else:
-            # Classify from the embedding output (embedding layer is part of the path)
-            out = self.finlinear(embedding_out)
+        # if self.data_type in ["tumor", "synthetic"]:
+        #     # Classify directly from the raw flattened features (no embedding layer in path)
+        #     out = self.finlinear(embedding)
+        # else:
+        #     # Classify from the embedding output (embedding layer is part of the path)
+        #     out = self.finlinear(embedding_out)
 
-        # out = self.finlinear(embedding_out)
+        out = self.finlinear(embedding_out)
 
         # Return both the embedding vector and the classification logits
         return embedding_out, out
@@ -1662,3 +1662,4 @@ if __name__ == "__main__":
 # Training:   172 cancer (61.43%) + 108 no cancer (38.57%)
 # Validation: 40 cancer (62.50%) + 24 no cancer (37.50%)
 # Testing:    40 cancer (62.50%) + 24 no cancer (37.50%)
+
