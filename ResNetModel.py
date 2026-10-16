@@ -310,7 +310,7 @@ def sampler(dataset):
     return weighted_sampler
 
 
-def split_data_per_type(image_patches, batch_size=16):
+def split_data_per_type(image_patches, batch_size=8):
     """
     Split image patches into stratified training, validation, and test sets
     based on cancer status, then create corresponding PyTorch DataLoaders.
@@ -676,14 +676,14 @@ class ModelEmbedding(nn.Module):
         # Compute the embedding vector via a linear transform followed by ReLU
         embedding_out = self.relu(self.linear(embedding))
 
-        # if self.data_type in ["synthetic"]:
-        #     # Classify directly from the raw flattened features (no embedding layer in path)
-        #     out = self.finlinear(embedding)
-        # else:
-        #     # Classify from the embedding output (embedding layer is part of the path)
-        #     out = self.finlinear(embedding_out)
+        if self.data_type in ["tumor", "voronoi"]:
+            # Classify directly from the raw flattened features (no embedding layer in path)
+            out = self.finlinear(embedding)
+        else:
+            # Classify from the embedding output (embedding layer is part of the path)
+            out = self.finlinear(embedding_out)
 
-        out = self.finlinear(embedding_out)
+        # out = self.finlinear(embedding_out)
 
         # Return both the embedding vector and the classification logits
         return embedding_out, out
@@ -769,7 +769,9 @@ def get_activation(name, activation):
     return hook
 
 
-def get_params(model, learningRate=5e-5, weight_decay=5e-5, momentum=0.70, factor=0.5, patience=3):
+# def get_params(model, learningRate=5e-5, weight_decay=5e-5, factor=0.5, patience=3):
+def get_params(model, learningRate=1e-5, weight_decay=1e-4, factor=0.5, patience=3):
+# def get_params(model, learningRate=1e-4, weight_decay=1e-4, factor=0.5, patience=3):
     """
     Configure and return the loss function, optimiser, and learning-rate scheduler.
 
@@ -802,8 +804,12 @@ def get_params(model, learningRate=5e-5, weight_decay=5e-5, momentum=0.70, facto
     return criterion, optimizer, scheduler
 
 
+# def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
+#           num_epochs=20, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+#           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[],
+#           all_train_f1 = [], all_val_f1 = []):
 def train(model, device, train_loader, val_loader, criterion, optimizer, scheduler,
-          num_epochs=20, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
+          num_epochs=30, start_epoch=0, all_train_embeddings=[], all_val_embeddings=[],
           all_train_loss=[], all_val_loss=[], all_train_acc=[], all_val_acc=[],
           all_train_f1 = [], all_val_f1 = []):
     """
@@ -996,9 +1002,14 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
         print()
         print()
 
-        # Step the LR scheduler using the validation loss (reduces LR on plateau)
+        # Step the LR scheduler using the validation loss
         if scheduler is not None:
             scheduler.step(val_loss)
+
+        # Print the learning rate after the scheduler update
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Learning Rate for Next Epoch: {current_lr:.6e}")
+        print()
 
     # Return all collected metrics including timing statistics
     return all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, all_train_acc, all_val_acc, \
@@ -1662,3 +1673,4 @@ if __name__ == "__main__":
 # Training:   172 cancer (61.43%) + 108 no cancer (38.57%)
 # Validation: 40 cancer (62.50%) + 24 no cancer (37.50%)
 # Testing:    40 cancer (62.50%) + 24 no cancer (37.50%)
+
