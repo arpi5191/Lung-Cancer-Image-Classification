@@ -136,8 +136,8 @@ def create_data_directories():
     if os.path.exists('/.dockerenv'):
         data_dir = '/data'  # Docker environment base directory
     else:
-        # data_dir = "/Users/arpitha/Documents/Research_Labs/Lab_Schwartz/Lung-Cancer-Image-Classification-main/data"
-        data_dir = '/ocean/projects/bio240001p/arpitha/data'  # Local environment
+        data_dir = "/Users/arpitha/Documents/Research_Labs/Lab_Schwartz/Lung-Cancer-Image-Classification-main/data"
+        # data_dir = '/ocean/projects/bio240001p/arpitha/data'  # Local environment
 
     # Delete existing base directory if it exists to start fresh
     if os.path.exists(data_dir):
@@ -310,7 +310,7 @@ def sampler(dataset):
     return weighted_sampler
 
 
-def split_data_per_type(image_patches, batch_size=8):
+def split_data_per_type(image_patches, batch_size=16):
     """
     Split image patches into stratified training, validation, and test sets
     based on cancer status, then create corresponding PyTorch DataLoaders.
@@ -642,7 +642,7 @@ class ModelEmbedding(nn.Module):
         self.data_type = data_type
 
         # Strip the original model's final layer; keep everything else as the feature extractor
-        self.features = nn.Sequential(*list(original_model.children()))[:-1]
+        self.features = nn.Sequential(*list(original_model.children())[:-1])
 
         # Linear layer projecting flattened features to a feature_dim-dimensional embedding
         self.linear = nn.Linear(feature_dim, feature_dim)
@@ -676,14 +676,14 @@ class ModelEmbedding(nn.Module):
         # Compute the embedding vector via a linear transform followed by ReLU
         embedding_out = self.relu(self.linear(embedding))
 
-        if self.data_type in ["tumor", "voronoi"]:
+        if self.data_type in ["tumor", "synthetic"]:
             # Classify directly from the raw flattened features (no embedding layer in path)
             out = self.finlinear(embedding)
         else:
             # Classify from the embedding output (embedding layer is part of the path)
             out = self.finlinear(embedding_out)
 
-        # out = self.finlinear(embedding_out)
+        out = self.finlinear(embedding_out)
 
         # Return both the embedding vector and the classification logits
         return embedding_out, out
@@ -770,26 +770,27 @@ def get_activation(name, activation):
 
 
 # def get_params(model, learningRate=5e-5, weight_decay=5e-5, factor=0.5, patience=3):
-def get_params(model, learningRate=1e-5, weight_decay=1e-4, factor=0.5, patience=3):
+# def get_params(model, learningRate=2e-5, weight_decay=1e-4, factor=0.5, patience=3):
 # def get_params(model, learningRate=1e-4, weight_decay=1e-4, factor=0.5, patience=3):
+def get_params(model, train_loader, num_epochs=30, learningRate=2e-5, weight_decay=1e-4):
     """
     Configure and return the loss function, optimiser, and learning-rate scheduler.
 
     Args:
         model (nn.Module): The model whose parameters will be optimised.
-        learningRate (float): Initial learning rate for AdamW. Default 1e-4.
-        weight_decay (float): L2 regularisation coefficient for AdamW. Default 1e-5.
-        momentum (float): Kept for API consistency; not used by AdamW. Default 0.70.
-        factor (float): Multiplicative LR reduction factor applied by the scheduler.
-            Default 0.5 (halves the LR on each trigger).
-        patience (int): Number of epochs with no validation-loss improvement before
-            the scheduler reduces the LR. Default 3.
+        train_loader (DataLoader): Training DataLoader; its length (batches per epoch)
+            is needed so OneCycleLR knows the total number of scheduler steps.
+        num_epochs (int): Total number of training epochs. MUST match the
+            ``num_epochs`` passed to ``train``. Default 30.
+        learningRate (float): Peak learning rate (``max_lr``) reached by OneCycleLR.
+            Default 2e-5.
+        weight_decay (float): L2 regularisation coefficient for AdamW. Default 1e-4.
 
     Returns:
-        tuple[nn.CrossEntropyLoss, torch.optim.AdamW, ReduceLROnPlateau]:
+        tuple[nn.CrossEntropyLoss, torch.optim.AdamW, OneCycleLR]:
             criterion  – Cross-entropy loss for multi-class classification.
             optimizer  – AdamW optimiser.
-            scheduler  – ``ReduceLROnPlateau`` scheduler monitoring validation loss.
+            scheduler  – ``OneCycleLR`` scheduler (stepped once per batch).
     """
 
     # Cross-entropy loss is standard for multi-class classification
@@ -798,8 +799,15 @@ def get_params(model, learningRate=1e-5, weight_decay=1e-4, factor=0.5, patience
     # AdamW couples weight decay correctly (decoupled from the gradient update)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learningRate, weight_decay=weight_decay)
 
-    # Reduce LR when validation loss stops improving
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=factor, patience=patience)
+    # OneCycleLR: LR warms up from max_lr/25 to max_lr, then anneals toward ~0 over the whole run.
+    # It needs the total number of steps (epochs * batches per epoch) up front, and it is
+    # stepped once per batch (see the training loop), not once per epoch.
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=learningRate,
+        epochs=num_epochs,
+        steps_per_epoch=len(train_loader)
+    )
 
     return criterion, optimizer, scheduler
 
@@ -816,8 +824,8 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
     Train the model for a fixed number of epochs with per-epoch validation.
 
     After every training epoch the model is evaluated on the validation set via
-    ``testing()``. The learning-rate scheduler is stepped using the validation
-    loss at the end of each epoch.
+    ``testing()``. The learning-rate scheduler (OneCycleLR) is stepped once per
+    training batch, immediately after ``optimizer.step()``.
 
     Per-epoch metrics collected for training:
         - Average cross-entropy loss.
@@ -832,7 +840,7 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
         val_loader (DataLoader): Iterable over validation mini-batches.
         criterion (nn.Module): Loss function.
         optimizer (torch.optim.Optimizer): Parameter update rule.
-        scheduler (lr_scheduler or None): LR scheduler stepped on validation loss.
+        scheduler (lr_scheduler or None): LR scheduler stepped once per batch.
             Pass ``None`` to disable scheduling.
         num_epochs (int): Total number of epochs to run. Default 45.
         start_epoch (int): First epoch index (used when resuming training). Default 0.
@@ -887,7 +895,8 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
             feats = feats.reshape(-1, 1, feature_dim, feature_dim)
 
             # Start time
-            torch.cuda.synchronize()
+            if device.type == "cuda":
+                torch.cuda.synchronize()
             batch_start = time.time()
 
             # Clear gradients from the previous iteration
@@ -921,8 +930,14 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
             # Apply the computed gradients to update model parameters
             optimizer.step()
 
+            # OneCycleLR must be stepped once per batch, right after optimizer.step()
+            # (not once per epoch like ReduceLROnPlateau was)
+            if scheduler is not None:
+                scheduler.step()
+
             # Record batch wall-clock time and throughput
-            torch.cuda.synchronize()
+            if device.type == "cuda":
+                torch.cuda.synchronize()
             batch_time = time.time() - batch_start
             batch_latencies.append(batch_time * 1000)
             batch_throughputs.append(feats.size(0) / batch_time)
@@ -1002,11 +1017,10 @@ def train(model, device, train_loader, val_loader, criterion, optimizer, schedul
         print()
         print()
 
-        # Step the LR scheduler using the validation loss
-        if scheduler is not None:
-            scheduler.step(val_loss)
+        # NOTE: the old per-epoch `scheduler.step(val_loss)` (ReduceLROnPlateau) was removed here.
+        # OneCycleLR is now stepped per batch inside the batch loop above.
 
-        # Print the learning rate after the scheduler update
+        # Print the current learning rate (as set by OneCycleLR after this epoch's last batch)
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Learning Rate for Next Epoch: {current_lr:.6e}")
         print()
@@ -1425,8 +1439,8 @@ def main():
         # Paths on the local HPC filesystem
 
         # Base directory containing all image patch folders
-        # base_path = "/Users/arpitha/Documents/Research_Labs/Lab_Schwartz/Lung-Cancer-Image-Classification-main"
-        base_path = '/ocean/projects/bio240001p/arpitha'
+        base_path = "/Users/arpitha/Documents/Research_Labs/Lab_Schwartz/Lung-Cancer-Image-Classification-main"
+        # base_path = '/ocean/projects/bio240001p/arpitha'
 
         if args.type == "tumor":
             # Use only real histopathology images
@@ -1529,7 +1543,9 @@ def main():
         model.features[8].register_forward_hook(hook_function)
     #
     # ── Optimiser and scheduler setup ─────────────────────────────────────────
-    criterion, optimizer, scheduler = get_params(model)
+    # OneCycleLR needs the train_loader (for batches per epoch) and the total number
+    # of epochs. num_epochs here MUST match the num_epochs used by train() (default 30).
+    criterion, optimizer, scheduler = get_params(model, train_loader, num_epochs=30)
 
     # ── Training ──────────────────────────────────────────────────────────────
     all_train_embeddings, all_val_embeddings, all_train_loss, all_val_loss, \
@@ -1673,4 +1689,5 @@ if __name__ == "__main__":
 # Training:   172 cancer (61.43%) + 108 no cancer (38.57%)
 # Validation: 40 cancer (62.50%) + 24 no cancer (37.50%)
 # Testing:    40 cancer (62.50%) + 24 no cancer (37.50%)
+
 
